@@ -1,14 +1,13 @@
-PROJECT_DIR = joinpath(@__DIR__, "..")
-
 # Make sure the test is always running in the same directory and within the same project.
 using Pkg
-cd(PROJECT_DIR)
+cd(joinpath(@__DIR__, ".."))
 Pkg.activate(".")
 
-# Enable asserts for B+ Tools.
 using BplusCore; @using_bplus_core
 using BplusApp; @using_bplus_app
 using BplusTools; @using_bplus_tools
+
+# Enable asserts for B+ Tools.
 BplusTools.ECS.bp_ecs_asserts_enabled() = true
 BplusTools.SceneTree.bp_scene_tree_asserts_enabled() = true
 BplusTools.Fields.bp_fields_asserts_enabled() = true
@@ -26,4 +25,4 @@ const TEST_HEADER_EXTRA = quote
         eval(use)
     end
 end
-include(joinpath(pathof(BplusCore), "..", "test_runner.jl"))
+include(BplusCore.TEST_RUNNER_PATH)

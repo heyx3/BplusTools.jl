@@ -190,7 +190,7 @@ function has_component(w::World, T::Type{<:AbstractComponent})::Bool
 end
 
 "Throws an error if there is more than one of the given type of component for the given entity"
-function get_component(e::Entity, T::Type{<:AbstractComponent})::Optional{T}
+function get_component(e::Entity, ::Type{T})::Optional{T} where {T<:AbstractComponent}
     lookup = e.world.component_lookup[e]
     if haskey(lookup, T)
         components = lookup[T]
@@ -206,13 +206,13 @@ function get_component(e::Entity, T::Type{<:AbstractComponent})::Optional{T}
     end
 end
 "Gets an iterator of all instances of the given component attached to the given entity"
-@inline function get_components(e::Entity, T::Type{<:AbstractComponent})
+@inline function get_components(e::Entity, ::Type{T}) where {T<:AbstractComponent}
     @bp_ecs_assert(isempty(EMPTY_ENTITY_COMPONENT_LOOKUP), "Somebody modified 'EMPTY_ENTITY_COMPONENT_LOOKUP'")
     per_component_lookup = get(e.world.component_lookup, e,
                                EMPTY_ENTITY_COMPONENT_LOOKUP)
     return (c::T for c in get(per_component_lookup, T, EMPTY_COMPONENT_SET)::Set{AbstractComponent})
 end
-function count_components(e::Entity, T::Type{<:AbstractComponent})
+function count_components(e::Entity, ::Type{T}) where {T<:AbstractComponent}
     @bp_ecs_assert(isempty(EMPTY_ENTITY_COMPONENT_LOOKUP), "Somebody modified 'EMPTY_ENTITY_COMPONENT_LOOKUP'")
     per_component_lookup = get(e.world.component_lookup, e,
                                EMPTY_ENTITY_COMPONENT_LOOKUP)
@@ -223,7 +223,7 @@ end
 Gets a singleton component, assumed to be the only one of its kind.
 Returns its owning entity as well.
 "
-function get_component(w::World, T::Type{<:AbstractComponent})::Optional{Tuple{T, Entity}}
+function get_component(w::World, ::Type{T})::Optional{Tuple{T, Entity}} where {T<:AbstractComponent}
     all_instances = get_components(w, T)
 
     # Get the first instance.
@@ -245,7 +245,7 @@ end
 Gets an iterator of all instances of the given component in the entire world.
 Each element is a `Tuple{T, Entity}`.
 "
-@inline function get_components(w::World, T::Type{<:AbstractComponent})
+@inline function get_components(w::World, ::Type{T}) where {T<:AbstractComponent}
     @bp_ecs_assert(isempty(EMPTY_ENTITY_SET), "Somebody modified 'EMPTY_ENTITY_SET'")
 
     relevant_entities = get(w.entity_lookup, T, EMPTY_ENTITY_SET)
@@ -254,6 +254,6 @@ Each element is a `Tuple{T, Entity}`.
     all_instances = Iterators.flatten(zip(instances, Iterators.repeated(e)) for (e, instances) in instances_per_entity)
     return ((c::T, e) for (c, e) in all_instances)
 end
-function count_components(w::World, T::Type{<:AbstractComponent})
+function count_components(w::World, ::Type{T}) where {T<:AbstractComponent}
     return get(w.component_counts, T, 0)
 end

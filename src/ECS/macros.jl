@@ -1,4 +1,4 @@
-# An internal interface is used to reference inherited behavior from parent components.
+# An internal interface is used to reference inherited behavior/data from parent components.
 #    Metadata:
 component_macro_fields(T::Type{<:AbstractComponent}) = error() # iteration of Pair{name, typeExpr}
 component_macro_has_custom_constructor(::Type{<:AbstractComponent})::Bool = error()
@@ -18,7 +18,7 @@ component_macro_finish_tick(::Type{<:AbstractComponent}, ::AbstractComponent    
 component_macro_all_promises(::Type{<:AbstractComponent}) = () # Symbols
 component_macro_unimplemented_promises(::Type{<:AbstractComponent}) = () # Symbols
 component_macro_implements_promise(::Type{<:AbstractComponent}, ::Val)::Bool = false
-component_macro_promise_data(::Type{<:AbstractComponent}, ::Val)::SplitDef = error()
+component_macro_promised_return_type(::Type{<:AbstractComponent}, ::Val)::Type = error()
 component_macro_promise_execute(T::Type{<:AbstractComponent}, ::AbstractComponent, v::Val,
                                 args...; kw_args...) = error(
     "Arguments do not match promise: ", T, ".", val_type(v), "(",
@@ -29,7 +29,7 @@ component_macro_promise_execute(T::Type{<:AbstractComponent}, ::AbstractComponen
 #    Configurables:
 component_macro_overridable_configurables(::Type{<:AbstractComponent}) = () # Symbols
 component_macro_overrides_configurable(::Type{<:AbstractComponent}, ::Val)::Bool = false
-component_macro_configurable_data(::Type{<:AbstractComponent}, ::Val)::SplitDef = error()
+component_macro_configurable_return_type(::Type{<:AbstractComponent}, ::Val)::Type = error()
 component_macro_configurable_execute(::Type{<:AbstractComponent},::AbstractComponent, v::Val,
                                      args...; kw_args...) = error(
     "Arguments do not match configurable: ", T, ".", val_type(v), "(",
@@ -576,7 +576,7 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
             $(@__MODULE__).component_macro_implements_promise(::Type{<:$(esc(component_name))}, ::Val{$(QuoteNode(p.name))}) = true
         ) end...)
         $(map(new_promises) do (source, def); :(
-            $(@__MODULE__).component_macro_promise_data(::Type{<:$(esc(component_name))}, ::Val{$(QuoteNode(def.name))}) = $def
+            $(@__MODULE__).component_macro_promised_return_type(::Type{<:$(esc(component_name))}, ::Val{$(QuoteNode(def.name))}) = $(esc(def.return_type))
         ) end...)
         $(map(implemented_promises) do def
             promise_name = def.name
@@ -620,7 +620,7 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
             promised_return_type = if supertype_t == AbstractComponent
                 nothing
             else
-                component_macro_promise_data(supertype_t, Val(promise_name)).return_type
+                component_macro_promised_return_type(supertype_t, Val(promise_name))
             end
             if exists(promised_return_type)
                 def.body = :( let result = $(def.body)
@@ -651,7 +651,7 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
             $(@__MODULE__).component_macro_overrides_configurable(::Type{$(esc(component_name))}, ::Val{$(QuoteNode(def.name))}) = true
         ) end...)
         $(map(new_configurables) do (source, def); :(
-            $(@__MODULE__).component_macro_configurable_data(::Type{$(esc(component_name))}, ::Val{$(QuoteNode(def.name))}) = $def
+            $(@__MODULE__).component_macro_configurable_return_type(::Type{$(esc(component_name))}, ::Val{$(QuoteNode(def.name))}) = $(esc(def.return_type))
         ) end...)
         $(map([implemented_configurables...]) do def
             configurable_name = def.name
@@ -695,7 +695,7 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
             configured_return_type = if supertype_t == AbstractComponent
                 nothing
             else
-                component_macro_configurable_data(supertype_t, Val(configurable_name)).return_type
+                component_macro_configurable_return_type(supertype_t, Val(configurable_name))
             end
             if exists(configured_return_type)
                 def.body = :( let result = $(def.body)

@@ -44,6 +44,11 @@ const Entity = _Entity{World}
 export World, Entity, AbstractComponent
 
 
-Base.show(io::IO, e::Entity) = print(io,
-    "Entity(<world>, ", e.components, ")"
-)
+function Base.show(io::IO, e::Entity)
+    print(io, "Entity(<world>, [")
+    for c in e.components
+        print(io, " ")
+        show(io, c)
+    end
+    print(io, " ])")
+end

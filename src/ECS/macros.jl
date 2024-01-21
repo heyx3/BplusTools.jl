@@ -40,9 +40,23 @@ component_macro_configurable_execute(::Type{<:AbstractComponent},::AbstractCompo
 #    Utilities:
 component_field_print(component, field_name::Val, field_value                   , io) = print(io, field_value)
 component_field_print(component, field_name::Val, field_value::AbstractComponent, io) = print(io, "<", typeof(field_value), ">")
+component_field_print(component, field_name::Val, field_value::Entity,            io) = print(io,
+    if (field_value == component.entity)
+        "<self entity>"
+    else
+        "<other entity>"
+    end
+)
+component_field_print(component, field_name::Val, field_value::World, io) = print(io,
+    if field_value == component.world
+        "<self world>"
+    else
+        "<other world>"
+    end
+)
 
-"Set to 'true' to see the printout of new defined components"
-PRINT_COMPONENT_CODE::Bool = false
+"To see the printout of new defined components, set this to some output stream"
+PRINT_COMPONENT_CODE::Optional{IO} = nothing
 
 """
 A very covenient way to define a component.
@@ -169,39 +183,62 @@ end
 """
 macro component(title, elements...)
     # Parse the component's name and parent type.
-    title_is_valid = @capture(title, name_Symbol)
-    local supertype_t
-    if title_is_valid
-        supertype_t = nothing
-    else
-        title_is_valid = @capture(title, name_<:parent_)
-        supertype_t = parent
+    title_data = SplitType(title)
+    if isnothing(title_data)
+        error("Invalid component name. Must be a type declaration such as 'A{T} <: B'. Got '", title, "'")
     end
-    if !title_is_valid
-        error("Invalid component name. Must be a name or 'name<:supertype'. Got '", title, "'")
-    end
-    component_name = name
 
     # We need to know about the supertype at compile-time.
-    if exists(supertype_t)
-        supertype_t = __module__.eval(supertype_t)
+    println("#TODO: If parent-component-type expr uses type params from the new child, the parent won't be resolvable at compile-time.",
+            " Strip out the type params when using eval(), then trace through the macro implementation and add them back as necessary.")
+    supertype_t = if exists(title_data.parent)
+        try
+            title_data.parent = __module__.eval(title_data.parent)
+        catch e
+            error("Unknown parent type: '", title_data.parent, "'")
+        end
+    else
+        nothing
     end
 
     # Extract the other parts of the declaration.
     attributes = elements[1:(end-1)]
     if length(elements) < 1
-        error("No body found for the component '", component_name, "'")
+        error("No body found for the component '", title_data.name, "'")
     end
     statements = (elements[end]::Expr).args
 
-    return macro_impl_component(component_name, supertype_t, attributes, statements)
+    return macro_impl_component(title_data, supertype_t, attributes, statements)
 end
 
-function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type},
+function macro_impl_component(title_data::SplitType, supertype_t::Optional{Type},
                               attributes, statements)
     if exists(supertype_t) && !(supertype_t <: AbstractComponent)
-        error("Component '", component_name, "'s parent type '", supertype_t, "' is not a component itself!")
+        error("Component '", title_data.name, "'s parent type '", supertype_t, "' is not a component itself!")
     end
+
+    # Generate some helpers for dealing with the component's type parameters.
+    type_param_names::Vector{Symbol} = map(title_data.type_params) do tp
+        if tp isa Symbol
+            tp
+        elseif isexpr(tp, :<:) && (length(tp.args) == 2)
+            tp.args[1]
+        else
+            error("Unexpected type param syntax: '", tp, "'")
+        end
+    end
+    esc_type_param_names = esc.(type_param_names)
+    component_with_type_params = if isempty(type_param_names)
+        title_data.name
+    else
+        :( $(title_data.name){$(type_param_names...)} )
+    end
+    component_broad_type = if isempty(type_param_names)
+        title_data.name
+    else
+        :( <:$(title_data.name) )
+    end
+
 
     # Parse the attributes.
     is_abstract::Bool = false
@@ -240,11 +277,11 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
         end
     end
 
-    # Inherit things from the supertype.
+    # Inherit attributes from the supertype.
     if exists(supertype_t)
         if is_entitysingleton_component(supertype_t)
             if is_entity_singleton
-                @warn "Component $component_name already inherits {entitySingleton}, so its own attribute is redundant"
+                @warn "Component $(title_data.name) already inherits {entitySingleton}, so its own attribute is redundant"
             else
                 is_entity_singleton = true
             end
@@ -252,12 +289,12 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
 
         if is_worldsingleton_component(supertype_t)
             if is_world_singleton
-                @warn "Component $component_name already inheritis {worldSingleton}, so its own attribute is redundant"
+                @warn "Component $(title_data.name) already inheritis {worldSingleton}, so its own attribute is redundant"
             else
                 is_world_singleton = true
             end
             if is_entity_singleton
-                @warn "Component $component_name has both {entitySingleton} and {worldSingleton} (at least one through inheritance), which is redundant"
+                @warn "Component $(title_data.name) has both {entitySingleton} and {worldSingleton} (at least one through inheritance), which is redundant"
             end
         end
 
@@ -266,10 +303,11 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
         push!(requirements, :( $(@__MODULE__).require_components($supertype_t)... ))
     else
         supertype_t = AbstractComponent
+        title_data.parent = AbstractComponent
     end
 
     # Get the full chain of component inheritance.
-    all_supertypes_youngest_first = [ component_name, get_component_types(supertype_t)... ]
+    all_supertypes_youngest_first = [ component_with_type_params, get_component_types(supertype_t)... ]
     all_supertypes_oldest_first = reverse(all_supertypes_youngest_first)
     if !all(isabstracttype, drop_last(all_supertypes_oldest_first))
         error("You may only inherit from abstract components due to Julia's type system")
@@ -369,8 +407,10 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
                 end
                 finish_tick = func_data.body
             elseif func_data.name in component_macro_unimplemented_promises(supertype_t)
+                @bp_check(!func_data.generated, "@generated @promise is currently unsupported")
                 push!(implemented_promises, func_data)
             elseif func_data.name in component_macro_overridable_configurables(supertype_t)
+                @bp_check(!func_data.generated, "@generated @configurable is currently unsupported")
                 push!(implemented_configurables, func_data)
             else
                 error("Unexpected function in component: '", func_data.name, "'")
@@ -395,7 +435,8 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
 
                 func_data = SplitDef(:( $(macro_data.args[1]) = nothing ))
                 func_data.doc_string = doc_string
-                if func_data.name in (component_macro_unimplemented_promises(supertype_t)..., component_macro_overridable_configurables(supertype_t))
+                if func_data.name in (component_macro_unimplemented_promises(supertype_t)...,
+                                      component_macro_overridable_configurables(supertype_t)...)
                     error("@promise hides inherited @promise or @configurable: '", func_data.name, "'")
                 end
 
@@ -414,7 +455,8 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
 
                 func_data = SplitDef(macro_data.args[1])
                 func_data.doc_string = doc_string
-                if func_data.name in (component_macro_unimplemented_promises(supertype_t)..., component_macro_overridable_configurables(supertype_t))
+                if func_data.name in (component_macro_unimplemented_promises(supertype_t)...,
+                                      component_macro_overridable_configurables(supertype_t)...)
                     error("@configurable hides inherited @promise or @configurable: '", func_data.name, "'")
                 end
 
@@ -424,12 +466,12 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
                 ))
                 push!(implemented_configurables, func_data)
             else
-                error("Unexpected macro in component '$component_name': $statement")
+                error("Unexpected macro in component '$(title_data.name)': $statement")
             end
         elseif statement isa LineNumberNode
             # Ignore it.
         else
-            error("Unexpected syntax in body of component '$component_name': \"$statement\"")
+            error("Unexpected syntax in body of component '$(title_data.name)': \"$statement\"")
         end
     end
 
@@ -441,22 +483,22 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
         )
     end
 
-
     # Process promise data for code generation.
-    all_promises::Vector{Symbol} = [
+    all_promise_names::Vector{Symbol} = [
         component_macro_all_promises(supertype_t)...,
         (tup[2].name for tup in new_promises)...
     ]
-    # If some promises are missing, and this component isn't abstract, throw an error.
-    missing_promises = filter(p_name -> none(p -> p.name == p_name, implemented_promises),
-                              component_macro_unimplemented_promises(supertype_t))
-    if !isempty(missing_promises) && !is_abstract
-        error("Component '$component_name' doesn't follow through on some promises: [ ",
-                  join(missing_promises, ", "), "]")
+    inherited_unimplemented_promise_names = filter(
+        p_name -> none(p -> p.name == p_name, implemented_promises),
+        component_macro_unimplemented_promises(supertype_t)
+    )
+    if !isempty(inherited_unimplemented_promise_names) && !is_abstract
+        error("Component '$(title_data.name)' doesn't follow through on some promises: [ ",
+                  join(inherited_unimplemented_promise_names, ", "), "]")
     end
 
     # Process configurable data for code generation.
-    all_configurables::Vector{Symbol} = [
+    all_configurable_names::Vector{Symbol} = [
         component_macro_overridable_configurables(supertype_t)...,
         (tup[2].name for tup in new_configurables)...
     ]
@@ -464,8 +506,8 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
     # Look for duplicate property names: fields, promises, and configurables.
     property_name_counts = Dict{Symbol, Int}()
     for name in Iterators.flatten(((name for (name, _) in field_data),
-                                   all_configurables,
-                                   all_promises))
+                                   all_configurable_names,
+                                   all_promise_names))
         if !haskey(property_name_counts, name)
             property_name_counts[name] = 0
         end
@@ -479,56 +521,101 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
 
     # Generate the type definition.
     type_decl = if is_abstract
-        :( Core.@__doc__(abstract type $(esc(component_name)) <: $supertype_t end) )
+        :( Core.@__doc__(abstract type $(esc(combinetype(title_data))) end) )
     else
-        :( Core.@__doc__(mutable struct $(esc(component_name)) <: $supertype_t
+        :( Core.@__doc__(mutable struct $(esc(combinetype(title_data)))
                 entity::Entity
                 world::World
 
                 $(( esc(:( $f::$t )) for (f, t) in field_data )...)
 
-                $component_name(entity, world) = let this = new()
-                    this.entity = entity
-                    this.world = world
-                    this
-                end
+                # Constructor needs to include type params only if applicable.
+                $(begin
+                    name = if isempty(type_param_names)
+                        esc(title_data.name)
+                    else
+                        :( $(esc(title_data.name)){$(type_param_names...)} )
+                    end
+
+                    signature = if isempty(type_param_names)
+                        :( $name(entity, world) )
+                    else
+                        :( $name(entity, world) where {$(type_param_names...)} )
+                    end
+
+                    new_call = if isempty(type_param_names)
+                        :( new() )
+                    else
+                        :( new{$(type_param_names...)}() )
+                    end
+
+                    :( $signature = begin
+                        this = $new_call
+                        this.entity = entity
+                        this.world = world
+                        return this
+                    end )
+                end)
         end) )
     end
 
     global_decls = [ ]
 
     # Implement the internal macro interface.
-    push!(global_decls, quote
-        $(@__MODULE__).component_macro_fields(::Type{$(esc(component_name))}) = $(Tuple(field_data))
-        $(@__MODULE__).component_macro_has_custom_constructor(::Type{$(esc(component_name))}) = $(exists(constructor))
-        $(if isnothing(constructor)
-          @bp_check((supertype_t == AbstractComponent) ||
-                      !component_macro_has_custom_constructor(supertype_t),
-                    "Parent type '", supertype_t, "' has a custom CONSTRUCT, so you need one too")
-          :( @inline $(@__MODULE__).component_macro_init(::Type{$(esc(component_name))}, $(esc(:this))::$(esc(component_name)),
-                                                         # 'entity' and 'world' are needed here
-                                                         #    so that the user's parameters can reference them
-                                                         #    as part of the default values.
-                                                         $(esc(:entity))::$Entity, $(esc(:world))::$World,
-                                                         $(esc.(name for (name, type) in field_data)...)
-                                                        ) = begin
-                $(map(field_data) do (name, type); :(
-                    $(esc(:( this.$name = convert($type, $name) )))
-                ) end...)
+    # Note that any user code may access the component's type parameters,
+    #    so almost all methods must explicitly name them.
+    function emit_macro_interface_impl(func_name::Symbol,
+                                       body
+                                       ;
+                                       extra_args = (),
+                                       extra_kw_args = (),
+                                       return_type = nothing,
+                                       extra_where_params = (),
+                                       broaden_component_type::Bool = false)
+        component_t = if broaden_component_type
+            :( ::Type{<:$(esc(component_with_type_params))} )
+        else
+            :( ::Type{$(esc(component_with_type_params))} )
+        end
+
+        func_type_params = tuple(
+            type_param_names...,
+            extra_where_params...
+        )
+        func_def = SplitDef(:(
+            $(@__MODULE__).$func_name($component_t,
+                                      $(combinearg.(SplitArg.(extra_args))...)
+                                      ;
+                                      $(combinearg.(SplitArg.(extra_kw_args))...)
+                                     ) where {$(esc.(func_type_params)...)} = $body
+        ))
+
+        if exists(return_type)
+            func_def.return_type = esc(return_type)
+        end
+
+        push!(global_decls, combinedef(func_def))
+    end
+    emit_macro_interface_impl(:component_macro_fields, Tuple(field_data))
+    emit_macro_interface_impl(:component_macro_has_custom_constructor, exists(constructor))
+    emit_macro_interface_impl(:component_macro_init,
+        # If using an auto-generated constructor,
+        #    the body should set each field to its corresponding argument.
+        if isnothing(constructor)
+            quote
+                $(map(field_data) do (name, type)
+                    return esc(:( this.$name = convert($type, $name) ))
+                end...)
 
                 # Note that all fields, including inherited ones, are handled by the above loop.
                 # No need to call into a parent constructor.
+                return nothing
             end
-        ) else :(
-            @inline $(@__MODULE__).component_macro_init(::Type{$(esc(component_name))}, $(esc(:this))::$(esc(component_name)),
-                                                        # 'entity' and 'world' are needed here
-                                                        #    so that the user's parameters can reference them
-                                                        #    as part of the default values.
-                                                        $(esc(:entity))::$Entity, $(esc(:world))::$World,
-                                                        $((esc(combinearg(a)) for a in constructor.args)...)
-                                                        ; $((esc(combinearg(a)) for a in constructor.kw_args)...)) = begin
-
-                # If there is a parent component type, offer SUPER() and count how many times it's invoked.
+        # If using an explicit constructor, the body should set up and then invoke the user's code.
+        else
+            quote
+                # If there is a parent component type, offer SUPER()
+                #    and and count how many times it's invoked.
                 if $(supertype_t != AbstractComponent)
                     n_super_calls::Int = 0
                     @inline $(esc(:SUPER))(args...; kw_args...) = begin
@@ -539,212 +626,318 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
                     end
                 end
 
-                $(esc(constructor.body))
+                # Nest the body in a lambda in case it has an explicit return statement.
+                (() -> $(esc(constructor.body)))()
 
                 # Make sure SUPER was called exactly once, if it was available.
                 if $(supertype_t != AbstractComponent) && (n_super_calls != 1)
-                    error("Your custom constructor for '", $(string(component_name)),
+                    error("Your custom constructor for '", $(string(title_data.name)),
                             "' should call SUPER exactly once, but it called it ",
                             n_super_calls, " times")
                 end
+
+                return nothing
             end
-        ) end )
-        $(@__MODULE__).component_macro_cleanup(::Type{$(esc(component_name))}, $(esc(:this))::$(esc(component_name)),
-                                               $(esc(destructor.b_name))::Bool) = begin
-            $(esc(:entity))::Entity = $(esc(:this)).entity
-            $(esc(:world))::World = $(esc(:this)).world
-            $(esc(destructor.body))
-        end
-        $(@__MODULE__).component_macro_tick(::Type{$(esc(component_name))}, $(esc(:this))::$(esc(component_name))) = begin
-            $(esc(:entity))::Entity = $(esc(:this)).entity
-            $(esc(:world))::World = $(esc(:this)).world
-            $(esc(tick))
-        end
-        $(@__MODULE__).component_macro_finish_tick(::Type{$(esc(component_name))}, $(esc(:this))::$(esc(component_name))) = begin
-            $(esc(:entity))::Entity = $(esc(:this)).entity
-            $(esc(:world))::World = $(esc(:this)).world
-            $(esc(finish_tick))
-        end
+        end,
+        extra_args = (
+            :( $(esc(:this))::$(esc(component_with_type_params)) ),
 
-        # Promises
-        $(@__MODULE__).component_macro_all_promises(::Type{$(esc(component_name))}) = tuple($(QuoteNode.(all_promises)...))
-        $(@__MODULE__).component_macro_unimplemented_promises(::Type{$(esc(component_name))}) = $(tuple(
-            missing_promises...,
-            (p[2].name for p in new_promises)...
-        ))
-        $(map(implemented_promises) do p; :(
-            $(@__MODULE__).component_macro_implements_promise(::Type{<:$(esc(component_name))}, ::Val{$(QuoteNode(p.name))}) = true
-        ) end...)
-        $(map(new_promises) do (source, def); :(
-            $(@__MODULE__).component_macro_promised_return_type(::Type{<:$(esc(component_name))}, ::Val{$(QuoteNode(def.name))}) = $(esc(def.return_type))
-        ) end...)
-        $(map(implemented_promises) do def
-            promise_name = def.name
-            name_quote = QuoteNode(promise_name)
+            # 'entity' and 'world' are needed so that the user's parameters can reference them
+            #    as part of their default values.
+            :( $(esc(:entity))::$Entity ),
+            :( $(esc(:world))::World ),
 
-            # The implementation actually goes into one of our internal macro interface functions.
-            def = SplitDef(def)
-            def.name = :( $(@__MODULE__).component_macro_promise_execute )
-            def.args = vcat(SplitArg.([ :( ::Type{<:$((component_name))}),
-                                        :( $((:this))::$((component_name)) ),
-                                        :( ::Val{$name_quote} ) ]),
-                            def.args)
-
-            # Provide access to SUPER(), which invokes the supertype's implementation.
-            first_implementing_parent_idx = findfirst(
-                t -> component_macro_implements_promise(t, Val(promise_name)),
-                enumerate_as_pair(Iterators.drop(all_supertypes_youngest_first, 1))
-            )
-            def.body = :(
-                let SUPER = if $(exists(first_implementing_parent_idx))
-                                @inline (args2...; kw_args2...) -> if isempty(args2) && isempty(kw_args2)
-                                    $(@__MODULE__).component_macro_promise_execute(
-                                        $supertype_t, this, Val($name_quote),
-                                        args...; kw_args...
-                                    )
-                                else
-                                    $(@__MODULE__).component_macro_promise_execute(
-                                        $supertype_t, this, Val($name_quote),
-                                        args2...; kw_args2...
-                                    )
-                                end
-                            else
-                                (a...; b...) -> error("No supertype implementation exists for ",
-                                                      promise_name)
-                            end
-                  $(def.body)
-                end
-            )
-
-            # If the original promise specified a return type, explicitly check for that.
-            promised_return_type = if supertype_t == AbstractComponent
-                nothing
+            # If using an auto-generated constructor, add one arg for each field.
+            (if isnothing(constructor)
+                (esc(name) for (name, type) in field_data)
+            # If using an explicit constructor, take parameters from the constructor definition.
+            # Escape each argument's entire declaration.
             else
-                component_macro_promised_return_type(supertype_t, Val(promise_name))
-            end
+                map(constructor.args) do ca
+                    ca2 = SplitArg(ca)
+                    ca2.is_escaped = true
+                    combinearg(ca2)
+                end
+            end)...
+        ),
+        extra_kw_args = 
+            # If using an explicit constructor, take named parameters from the constructor definition.
+            # Escape each argument's entire declaration.
+            if exists(constructor)
+                map(constructor.kw_args) do ca
+                    ca2 = SplitArg(ca)
+                    ca2.is_escaped = true
+                    combinearg(ca2)
+                end
+            else
+                ()
+            end,
+        extra_where_params = if exists(constructor)
+            constructor.where_params
+        else
+            ()
+        end
+    )
+    emit_macro_interface_impl(:component_macro_cleanup,
+        quote
+            $(esc(:entity))::Entity = $(esc(:this)).entity
+            $(esc(:world))::World = $(esc(:this)).world
+
+            # Nest the body in a lambda in case it has an explicit return statement.
+            (() -> $(esc(destructor.body)))()
+
+            return nothing
+        end,
+        extra_args = (
+            :( $(esc(:this))::$(esc(component_with_type_params)) ),
+            :( $(esc(destructor.b_name))::Bool )
+        )
+    )
+    emit_macro_interface_impl(:component_macro_tick,
+        quote
+            $(esc(:entity))::Entity = $(esc(:this)).entity
+            $(esc(:world))::World = $(esc(:this)).world
+
+            # Nest the body in a lambda in case it has an explicit return statement.
+            (() -> $(esc(tick)))()
+
+            return nothing
+        end,
+        extra_args = tuple(
+            :( $(esc(:this))::$(esc(component_with_type_params)) )
+        )
+    )
+    emit_macro_interface_impl(:component_macro_finish_tick,
+        quote
+            $(esc(:entity))::Entity = $(esc(:this)).entity
+            $(esc(:world))::World = $(esc(:this)).world
+
+            # Nest the body in a lambda in case it has an explicit return statement.
+            (() -> $(esc(finish_tick)))()
+
+            return nothing
+        end,
+        extra_args = tuple(
+            :( $(esc(:this))::$(esc(component_with_type_params)) )
+        )
+    )
+    # Promises:
+    emit_macro_interface_impl(:component_macro_all_promises, Tuple(all_promise_names))
+    emit_macro_interface_impl(:component_macro_unimplemented_promises, tuple(
+        inherited_unimplemented_promise_names...,
+        (p[2].name for p in new_promises)...
+    ))
+    for p_def in implemented_promises; emit_macro_interface_impl(:component_macro_implements_promise,
+        true,
+        extra_args = tuple(
+            :( ::Val{$(QuoteNode(p_def.name))} )
+        )
+    ) end
+    for (source, def) in new_promises; emit_macro_interface_impl(:component_macro_promised_return_type,
+        esc(def.return_type),
+        extra_args = tuple(
+            :( ::Val{$(QuoteNode(def.name))} )
+        ),
+        extra_where_params = def.where_params,
+        broaden_component_type=true
+    ) end
+    for def in implemented_promises # :component_macro_promise_execute
+        promise_name = def.name
+        name_quote = QuoteNode(promise_name)
+        name_str = string(promise_name)
+
+        # Generate the full body.
+        # Unpack the arguments from 'args...' and 'kw_args...'.
+        # Do this unpacking through a lambda call,
+        #    which has the added benefit of turning any 'return' statements into expression outputs.
+        body_lambda = SplitDef(def)
+        body_lambda.name = nothing
+        body = quote
+            runner = $(esc(combinedef(body_lambda)))
+            runner(args...; kw_args...)
+        end
+        if exists(def.return_type)
+            body = :( $body::$(esc(def.return_type)) )
+        end
+        # Provide access to SUPER(), which invokes the supertype's implementation.
+        # Obviously this can only be provided if a supertype *has* an implementation.
+        first_implementing_parent_idx = findfirst(
+            t -> component_macro_implements_promise(t, Val(promise_name)),
+            enumerate_as_pair(Iterators.drop(all_supertypes_youngest_first, 1))
+        )
+        super_impl_expr = if isnothing(first_implementing_parent_idx)
+            :( (a...; b...) -> error("No supertype implementation exists for @promise ", $name_str) )
+        else
+            :( @inline (args2...; kw_args2...) ->
+                   # If no arguments were passed explicitly, pass them all through implicitly.
+                   if isempty(args2) && isempty(kw_args2)
+                       $(@__MODULE__).component_macro_promise_execute(
+                           $supertype_t, this, Val($name_quote),
+                           args...; kw_args...
+                       )
+                   else
+                       $(@__MODULE__).component_macro_promise_execute(
+                           $supertype_t, this, Val($name_quote),
+                           args2...; kw_args2...
+                       )
+                   end
+            )
+        end
+        body = :( let $(esc(:SUPER)) = $(esc(super_impl_expr)); $body; end )
+        # If the original promise specified a return type, explicitly check for that.
+        if supertype_t != AbstractComponent
+            promised_return_type = component_macro_promised_return_type(supertype_t, Val(promise_name))
             if exists(promised_return_type)
-                def.body = :( let result = $(def.body)
+                body = quote
+                    result = $body
                     if !isa(result, $promised_return_type)
-                        error($(string(component_name)), ".",
-                                $(string(promise_name)), " doesn't return a ",
-                                $(string(promised_return_type)),
-                              "! It returned a ", typeof(result))
+                        error($(string(title_data.name)), ".", $(string(promise_name)),
+                                " doesn't return a ", $(string(promised_return_type)),
+                                "! It returned a ", typeof(result))
                     else
                         result
                     end
-                end )
-            end
-
-            # Set up the local variables 'entity' and 'world'.
-            def.body = :( let entity = this.entity,
-                              world = this.world
-                            $(def.body)
-                        end )
-
-            def.body = def.body
-            return esc(combinedef(def))
-        end...)
-
-        # Configurables
-        $(@__MODULE__).component_macro_overridable_configurables(::Type{$(esc(component_name))}) = $(Tuple(all_configurables))
-        $(map(implemented_configurables) do def; :(
-            $(@__MODULE__).component_macro_overrides_configurable(::Type{$(esc(component_name))}, ::Val{$(QuoteNode(def.name))}) = true
-        ) end...)
-        $(map(new_configurables) do (source, def); :(
-            $(@__MODULE__).component_macro_configurable_return_type(::Type{$(esc(component_name))}, ::Val{$(QuoteNode(def.name))}) = $(esc(def.return_type))
-        ) end...)
-        $(map([implemented_configurables...]) do def
-            configurable_name = def.name
-            name_quote = QuoteNode(configurable_name)
-
-            # The implementation actually goes into one of our internal macro interface functions.
-            def = SplitDef(def)
-            def.name = :( $(@__MODULE__).component_macro_configurable_execute )
-            def.args = vcat(SplitArg.([ :( ::Type{<:$((component_name))}),
-                                        :( $((:this))::$((component_name)) ),
-                                        :( ::Val{$name_quote} ) ]),
-                            def.args)
-
-            # Provide access to SUPER(), which invokes the supertype's implementation.
-            first_implementing_parent_idx = findfirst(
-                t -> component_macro_overrides_configurable(t, Val(configurable_name)),
-                enumerate_as_pair(Iterators.drop(all_supertypes_youngest_first, 1))
-            )
-            def.body = :(
-                let SUPER = if $(exists(first_implementing_parent_idx))
-                                @inline (args2...; kw_args2...) -> if isempty(args2) && isempty(kw_args2)
-                                    $(@__MODULE__).component_macro_configurable_execute(
-                                        $supertype_t, this, Val($name_quote),
-                                        args...; kw_args...
-                                    )
-                                else
-                                    $(@__MODULE__).component_macro_configurable_execute(
-                                        $supertype_t, this, Val($name_quote),
-                                        args2...; kw_args2...
-                                    )
-                                end
-                            else
-                                (a...; b...) -> error("No supertype implementation exists for ",
-                                                      configurable_name)
-                            end
-                  $(def.body)
                 end
-            )
-
-            # If the original specified a return type, explicitly check for that.
-            configured_return_type = if supertype_t == AbstractComponent
-                nothing
-            else
-                component_macro_configurable_return_type(supertype_t, Val(configurable_name))
             end
+        end
+        # Set up the local variables 'entity' and 'world'.
+        body = :( let $(esc(:entity)) = $(esc(:this)).entity,
+                      $(esc(:world)) = $(esc(:this)).world
+            $body
+        end )
+
+        emit_macro_interface_impl(:component_macro_promise_execute, body,
+            extra_args = (
+                :( $(esc(:this))::$(esc(component_with_type_params)) ),
+                :( ::Val{$name_quote} ),
+                :( args... )
+            ),
+            extra_kw_args = tuple(:( kw_args... )),
+            extra_where_params = def.where_params,
+            return_type = def.return_type,
+            broaden_component_type = is_abstract
+        )
+    end
+    # Configurables:
+    emit_macro_interface_impl(:component_macro_overridable_configurables, Tuple(all_configurable_names))
+    for c_def in implemented_configurables; emit_macro_interface_impl(:component_macro_overrides_configurable,
+        true,
+        extra_args = tuple(
+            :( ::Val{$(QuoteNode(c_def.name))} )
+        )
+    ) end
+    for (source, def) in new_configurables; emit_macro_interface_impl(:component_macro_configurable_return_type,
+        esc(def.return_type),
+        extra_args = tuple(
+            :( ::Val{$(QuoteNode(def.name))} )
+        ),
+        extra_where_params = def.where_params
+    ) end
+    for def in implemented_configurables
+        configurable_name = def.name
+        name_quote = QuoteNode(configurable_name)
+        name_str = string(configurable_name)
+
+        # Generate the full body.
+        # Unpack the arguments from 'args...' and 'kw_args...'.
+        # Do this unpacking through a lambda call,
+        #    which has the added benefit of turning any 'return' statements into expression outputs.
+        body_lambda = SplitDef(def)
+        body_lambda.name = nothing
+        body_lambda.return_type = nothing
+        body = quote
+            runner = $(esc(combinedef(body_lambda)))
+            runner(args...; kw_args...)
+        end
+        if exists(def.return_type)
+            body = :( $body::$(esc(def.return_type)) )
+        end
+        # Provide access to SUPER(), which invokes the supertype's implementation.
+        # Obviously this can only be provided if a supertype *has* an implementation.
+        first_implementing_parent_idx = findfirst(
+            t -> component_macro_overrides_configurable(t, Val(configurable_name)),
+            enumerate_as_pair(Iterators.drop(all_supertypes_youngest_first, 1))
+        )
+        super_impl_expr = if isnothing(first_implementing_parent_idx)
+            :( (a...; b...) -> error("No supertype implementation exists for @configurable ", $name_str) )
+        else
+            :( @inline (args2...; kw_args2...) ->
+                   # If no arguments were passed explicitly, pass them all through implicitly.
+                   if isempty(args2) && isempty(kw_args2)
+                       $(@__MODULE__).component_macro_configurable_execute(
+                           $supertype_t, this, Val($name_quote),
+                           args...; kw_args...
+                       )
+                   else
+                       $(@__MODULE__).component_macro_configurable_execute(
+                           $supertype_t, this, Val($name_quote),
+                           args2...; kw_args2...
+                       )
+                   end )
+        end
+        body = :( let $(esc(:SUPER)) = $(esc(super_impl_expr)); $body; end )
+        # If the original definition specified a return type, explicitly check for that.
+        if supertype_t != AbstractComponent
+            configured_return_type = component_macro_configurable_return_type(supertype_t, Val(configurable_name))
             if exists(configured_return_type)
-                def.body = :( let result = $(def.body)
+                body = quote
+                    result = $body
                     if !isa(result, $configured_return_type)
-                        error($(string(component_name)), ".", $(string(configurable_name)),
+                        error($(string(title_data.name)), ".", $(string(configurable_name)),
                                 " doesn't return a ", $(string(configured_return_type)),
                                 "! It returned a ", typeof(result))
                     else
                         result
                     end
-                end )
+                end
             end
+        end
+        # Set up the local variables 'entity' and 'world'.
+        body = :( let $(esc(:entity)) = $(esc(:this)).entity,
+                      $(esc(:world)) = $(esc(:this)).world
+                    $body
+                end )
 
-            # Set up the local variables 'entity' and 'world'.
-            def.body = :( let entity = this.entity,
-                              world = this.world
-                            $(def.body)
-                        end )
-
-            def.body = (def.body)
-            return esc(combinedef(def))
-        end...)
-    end)
+        emit_macro_interface_impl(:component_macro_configurable_execute, body,
+            extra_args = (
+                :( $(esc(:this))::$(esc(component_with_type_params)) ),
+                :( ::Val{$name_quote} ),
+                :( args... )
+            ),
+            extra_kw_args = [
+                :( kw_args... )
+            ],
+            extra_where_params = def.where_params,
+            return_type = def.return_type,
+            broaden_component_type = is_abstract
+        )
+    end
 
     # Implement promises and configurables as properties.
     push!(global_decls, quote
-        @inline $Base.propertynames(c::$(esc(component_name))) = tuple(
+        @inline $Base.propertynames(::$(esc(title_data.name))) = tuple(
             :world, :entity,
             $((QuoteNode(n) for (n, T) in field_data)...),
-            $((QuoteNode(p) for p in all_promises)...),
-            $((QuoteNode(c) for c in all_configurables)...)
+            $((QuoteNode(p) for p in all_promise_names)...),
+            $((QuoteNode(c) for c in all_configurable_names)...)
         )
 
-        @inline $Base.getproperty(c::$(esc(component_name)), name::Symbol) = getproperty(c, Val(name))
-        @inline $Base.getproperty(c::$(esc(component_name)), ::Val{:entity}) = getfield(c, :entity)
-        @inline $Base.getproperty(c::$(esc(component_name)), ::Val{:world}) = getfield(c, :world)
+        @inline $Base.getproperty(c::$(esc(title_data.name)), name::Symbol) = getproperty(c, Val(name))
+        @inline $Base.getproperty(c::$(esc(title_data.name)), ::Val{:entity}) = getfield(c, :entity)
+        @inline $Base.getproperty(c::$(esc(title_data.name)), ::Val{:world}) = getfield(c, :world)
 
         $(map(field_data) do (name, type)
-            :( @inline $Base.getproperty(c::$(esc(component_name)), ::Val{$(QuoteNode(name))}) =
+            :( @inline $Base.getproperty(c::$(esc(title_data.name)), ::Val{$(QuoteNode(name))}) =
                    getfield(c, $(QuoteNode(name))) )
         end...)
 
         $(map(implemented_promises) do promise
             quoted = QuoteNode(promise.name)
             return :(
-                @inline $Base.getproperty(c::$(esc(component_name)), ::Val{$quoted}) =
-                    (args...; kw_args...) -> begin
+                @inline $Base.getproperty(c::$(esc(title_data.name)), ::Val{$quoted}) =
+                    @inline (args...; kw_args...) -> begin
                         $(@__MODULE__).component_macro_promise_execute(
-                            $(esc(component_name)), c, Val($quoted),
+                            typeof(c), c, Val($quoted),
                             args...; kw_args...
                         )
                     end
@@ -754,10 +947,10 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
         $(map(implemented_configurables) do def
             quoted = QuoteNode(def.name)
             return :(
-                @inline $Base.getproperty(c::$(esc(component_name)), ::Val{$quoted}) =
-                    (args...; kw_args...) -> begin
+                @inline $Base.getproperty(c::$(esc(title_data.name)), ::Val{$quoted}) =
+                    @inline (args...; kw_args...) -> begin
                         $(@__MODULE__).component_macro_configurable_execute(
-                            $(esc(component_name)), c, Val($quoted),
+                            typeof(c), c, Val($quoted),
                             args...; kw_args...
                         )
                     end
@@ -767,56 +960,83 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
 
     # Implement the external interface.
     push!(global_decls, quote
-        $(@__MODULE__).is_entitysingleton_component(::Type{$(esc(component_name))})::Bool = $is_entity_singleton
-        $(@__MODULE__).is_worldsingleton_component(::Type{$(esc(component_name))})::Bool = $is_world_singleton
-        $(@__MODULE__).require_components(::Type{$(esc(component_name))}) = tuple($(esc.(requirements)...))
-        $(@__MODULE__).create_component(::Type{$(esc(component_name))}, entity::$Entity, args...; kw_args...) = begin
-            if $is_abstract
-                $(if isnothing(defaultor)
-                      :( error("Can't create a '", $(string(component_name)),
-                                 "'; it's abstract and no DEFAULT() was provided") )
-                  else
-                      :( return $(@__MODULE__).create_component(
-                        $(esc(defaultor[1])), entity,
-                        $(esc.(defaultor[2])...)
-                        ; $(esc.(defaultor[3])...)
-                      ) )
-                  end)
-            else
-                this = $(esc(component_name))(entity, entity.world)
-                $(@__MODULE__).component_macro_init($(esc(component_name)),
-                                                    this, entity, entity.world,
-                                                    args...; kw_args...)
-                return this
+        $(@__MODULE__).is_entitysingleton_component(::Type{$(esc(component_broad_type))})::Bool = $is_entity_singleton
+        $(@__MODULE__).is_worldsingleton_component(::Type{$(esc(component_broad_type))})::Bool = $is_world_singleton
+        # For methods that might want type params,
+        #    conditionally add them (adding an empty {} statement confuses the parser).
+        $(let inner_def = :( $(@__MODULE__).require_components(::Type{$(esc(component_with_type_params))}
+                                                              ) =
+                                 tuple($(esc.(requirements)...)))
+            sd = SplitDef(inner_def)
+            sd.where_params =  Tuple(esc_type_param_names)
+            combinedef(sd)
+        end)
+        $(let inner_def = :( $(@__MODULE__).create_component(::Type{$(esc(component_with_type_params))},
+                                                             entity::$Entity,
+                                                             args...; kw_args...
+                                                            ) )
+            sd = SplitDef(inner_def)
+            sd.where_params = Tuple(esc_type_param_names)
+            sd.body = quote
+                if $is_abstract
+                    $(if isnothing(defaultor)
+                          :( error("Can't create a '", $(string(component_with_type_params)),
+                                     "'; it's abstract and no DEFAULT() was provided") )
+                      else
+                          :( return $(@__MODULE__).create_component(
+                            $(esc(defaultor[1])), entity,
+                            $(esc.(defaultor[2])...)
+                            ; $(esc.(defaultor[3])...)
+                          ) )
+                      end)
+                else
+                    this = $(esc(component_with_type_params))(entity, entity.world)
+                    $(@__MODULE__).component_macro_init(typeof(this),
+                                                        this, entity, entity.world,
+                                                        args...; kw_args...)
+                    return this
+                end
             end
-        end
-        $(@__MODULE__).destroy_component(c::$(esc(component_name)), e::$Entity, is_entity_dying::Bool) = begin
-            @bp_ecs_assert(c.entity == e, "Given the wrong entity")
-            $((
-                :( $(@__MODULE__).component_macro_cleanup($(((parent_t isa Symbol) ? esc(parent_t) : parent_t)),
-                                                          c, is_entity_dying) )
-                  for parent_t in all_supertypes_youngest_first
-            )...)
-            return nothing
-        end
-        $(@__MODULE__).tick_component(c::$(esc(component_name)), e::$Entity) = begin
-            @bp_ecs_assert(c.entity == e, "Given the wrong entity")
-            $((
-                :( $(@__MODULE__).component_macro_tick($(esc(parent_t)), c) )
-                  for parent_t in all_supertypes_youngest_first
-            )...)
-            $((
-                :( $(@__MODULE__).component_macro_finish_tick($(esc(parent_t)), c) )
-                  for parent_t in all_supertypes_oldest_first
-            )...)
-            return nothing
-        end
+            combinedef(sd)
+        end )
+        $(let inner_def = :( $(@__MODULE__).destroy_component(c::$(esc(component_with_type_params)),
+                                                              e::$Entity,
+                                                              is_entity_dying::Bool)
+                           )
+            sd = SplitDef(inner_def)
+            sd.where_params = Tuple(esc_type_param_names)
+            sd.body = quote
+                @bp_ecs_assert(c.entity == e, "Given the wrong entity")
+                $(map(all_supertypes_youngest_first) do T
+                    :( $(@__MODULE__).component_macro_cleanup($(esc(T)), c, is_entity_dying) )
+                end...)
+                return nothing
+            end
+            combinedef(sd)
+        end )
+        $(let inner_def = :( $(@__MODULE__).tick_component(c::$(esc(title_data.name)),
+                                                           e::$Entity)
+                           )
+            sd = SplitDef(inner_def)
+            sd.where_params = Tuple(esc_type_param_names)
+            sd.body = quote
+                @bp_ecs_assert(c.entity == e, "Given the wrong entity")
+                $(map(all_supertypes_youngest_first) do T
+                    :( $(@__MODULE__).component_macro_tick($(esc(T)), c) )
+                end...)
+                $(map(all_supertypes_oldest_first) do T
+                    :( $(@__MODULE__).component_macro_finish_tick($(esc(T)), c) )
+                end...)
+                return nothing
+            end
+            combinedef(sd)
+        end)
     end)
 
     # Add some other useful stuff.
-    !is_abstract && push!(global_decls, :(
-        function $Base.print(io::IO, c::$(esc(component_name)))
-            print(io, $(string(component_name)), "(<entity>, <world>" )
+    if !is_abstract; push!(global_decls, :(
+        function $Base.show(io::IO, c::$(esc(title_data.name)))
+            print(io, typeof(c), "(<entity>, <world>")
             $(map(field_data) do (name, declared_type); quote
                 print(io, ", ")
                 $(@__MODULE__).component_field_print(
@@ -827,14 +1047,17 @@ function macro_impl_component(component_name::Symbol, supertype_t::Optional{Type
             end end...)
             print(io, ")")
         end
-    ))
+    )) end
 
     final_expr = quote
         $type_decl
         $(global_decls...)
     end
-    if PRINT_COMPONENT_CODE
-        @info "\n$(MacroTools.prettify(final_expr))\n\nCOMPONENT $component_name\n"
+    if exists(PRINT_COMPONENT_CODE)
+        print(PRINT_COMPONENT_CODE,
+              "\nCOMPONENT ", combinetype(title_data),
+              "\n", MacroTools.prettify(final_expr),
+              "\n\n")
     end
     return final_expr
 end

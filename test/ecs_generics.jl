@@ -64,7 +64,7 @@ c_Ad_no.modify_i_2(7)
 @bp_check(c_Ad_yes.i == (12*5)-6, c_Ad_yes)
 @bp_check(c_Ad_no.i == (15)-10, c_Ad_no)
 
-# Define "B" components to test promises and CONSTRUCT().
+# Define "B" components to test promises, and builtin functions.
 @component B {abstract} begin
     str::String
 
@@ -72,10 +72,14 @@ c_Ad_no.modify_i_2(7)
 
     "Sets the `str` field to a description of this component"
     @promise stringify_self()::Nothing
+
+    TICK() = (this.str *= ".")
+    DESTRUCT() = (this.str = "parent")
 end
 @component Ba{T} <: B begin
     t::T
     stringify_self() = (this.str = string(this.t))
+    TICK() = (this.str *= string(T))
 end
 @component Bb{T} <: B begin
     t::T
@@ -84,6 +88,10 @@ end
         (this.t = convert(T, t))
     end
     stringify_self() = (this.str = "b$T")
+    DESTRUCT() = begin
+        this.str = string(T) # Overridden by parent shutdown
+        this.t = zero(T)
+    end
 end
 c_B = add_component(en, B)
 c_Ba = add_component(en, Ba{UInt8}, 5, "uint8")
@@ -104,6 +112,19 @@ c_Bb.stringify_self()
 @bp_check(c_Ba.str == string(5), c_Ba)
 @bp_check(c_Bb.t == v3f(3, 4, 5), c_Bb)
 @bp_check(c_Bb.str == "b$v3f", c_Bb)
+
+# Test TICK().
+tick_world(world, 0.1f0)
+@bp_check(c_B.str == "$(5.4).$Float64", c_B)
+@bp_check(c_Ba.str == "$(5).$UInt8", c_Ba)
+@bp_check(c_Bb.str == "b$v3f.", c_Bb)
+
+# Test DESTRUCT().
+remove_entity(world, en)
+@bp_check(c_B.str == "parent", c_B)
+@bp_check(c_Ba.str == "parent", c_Ba)
+@bp_check(c_Bb.str == "parent", c_Bb)
+@bp_check(c_Bb.t == zero(v3f), c_Bb)
 
 
 #TODO: C{T} component to test the parent type being generic

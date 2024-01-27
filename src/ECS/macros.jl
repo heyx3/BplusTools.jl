@@ -122,20 +122,26 @@ Here is a detailed example of an abstract component:
     # Non-abstract child components must implement this.
     # Abstract child components may choose to implement this for their children.
     # In the latter case, the concrete children can further override the behavior,
-    #    and invoke `BASE()` to get the original parent implementation.
+    #    and invoke `SUPER()` to get the original parent implementation.
+    # If `SUPER()` is called with no arguments,
+    #    then the arguments given to the child implementation are automatically forwarded.
     @promise finish_maneuver(last_time_step::Float32)
 
     # Child components may choose to override this.
     # It must return a bool.
     # It indicates whether to cut off the maneuver early.
-    # When overriding this, you can invoke BASE() to get the implementation of your parent.
+    # When overriding this, you can invoke SUPER() to get the implementation of your parent.
+    # If `SUPER()` is called with no arguments,
+    #    then the arguments given to the child implementation are automatically forwarded.
     @conigurable should_stop()::Bool = false
 
-    # This abstract component handles the timing for its children.
+    # This abstract base type handles the timing for its children.
+    # Base class TICK() is called before children's TICK().
     function TICK()
         this.progress_normalized += world.delta_seconds / this.duration
     end
     # After all tick logic is done (including children), check whether the animation is finished.
+    # Base class FINISH_TICK() runs after children's FINISH_TICK().
     function FINISH_TICK()
         if this.should_stop()
             remove_component(entity, this)
@@ -1039,17 +1045,17 @@ function macro_impl_component(title_data::SplitType, supertype_t::Optional{Type}
             end
             combinedef(sd)
         end )
-        $(let inner_def = :( $(@__MODULE__).tick_component(c::$(esc(title_data.name)),
+        $(let inner_def = :( $(@__MODULE__).tick_component(c::$(esc(component_with_type_params)),
                                                            e::$Entity)
                            )
             sd = SplitDef(inner_def)
             sd.where_params = Tuple(esc_type_param_names)
             sd.body = quote
                 @bp_ecs_assert(c.entity == e, "Given the wrong entity")
-                $(map(all_supertypes_youngest_first) do T
+                $(map(all_supertypes_oldest_first) do T
                     :( $(@__MODULE__).component_macro_tick($(esc(T)), c) )
                 end...)
-                $(map(all_supertypes_oldest_first) do T
+                $(map(all_supertypes_youngest_first) do T
                     :( $(@__MODULE__).component_macro_finish_tick($(esc(T)), c) )
                 end...)
                 return nothing

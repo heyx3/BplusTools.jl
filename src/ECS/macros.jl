@@ -69,12 +69,14 @@ The basic syntax is this:
     field2
 
     # By default, a component is constructed by providing each of its fields, in order.
-    # Parent-type's fields come before child-type's fields.
+    # Inherited fields come after the new fields.
     # However, you can override this like so:
     function CONSTRUCT(f)
         # All functions within a @component can reference "this", "entity", and "world".
         this.field1 = Float32(f)
         this.field2 = length(world.entities)
+        # You must call SUPER to invoke the parent constructor.
+        SUPER(3, f+4)
     end
     function DESTRUCT() # Optionally take a Bool for whether the owning entity is being destroyed
         println("Delta entities: ", length(world.entities) - this.field2)
@@ -189,8 +191,6 @@ macro component(title, elements...)
     end
 
     # We need to know about the supertype at compile-time.
-    println("#TODO: If parent-component-type expr uses type params from the new child, the parent won't be resolvable at compile-time.",
-            " Strip out the type params when using eval(), then trace through the macro implementation and add them back as necessary.")
     supertype_t = if exists(title_data.parent)
         try
             title_data.parent = __module__.eval(title_data.parent)
@@ -313,11 +313,7 @@ function macro_impl_component(title_data::SplitType, supertype_t::Optional{Type}
         error("You may only inherit from abstract components due to Julia's type system")
     end
 
-    # Take fields from the parent before adding our own.
     field_data = Vector{Pair{Symbol, Any}}()
-    if supertype_t != AbstractComponent
-        append!(field_data, component_macro_fields(supertype_t))
-    end
 
     # Parse the declarations.
     constructor::Optional{SplitDef} = nothing
@@ -473,6 +469,11 @@ function macro_impl_component(title_data::SplitType, supertype_t::Optional{Type}
         else
             error("Unexpected syntax in body of component '$(title_data.name)': \"$statement\"")
         end
+    end
+
+    # Take fields from the parent after the new ones.
+    if supertype_t != AbstractComponent
+        append!(field_data, component_macro_fields(supertype_t))
     end
 
     # Post-process the statement data.
@@ -772,22 +773,33 @@ function macro_impl_component(title_data::SplitType, supertype_t::Optional{Type}
                    # If no arguments were passed explicitly, pass them all through implicitly.
                    if isempty(args2) && isempty(kw_args2)
                        $(@__MODULE__).component_macro_promise_execute(
-                           $supertype_t, this, Val($name_quote),
+                           $supertype_t, $(esc(:this)), Val($name_quote),
                            args...; kw_args...
                        )
                    else
                        $(@__MODULE__).component_macro_promise_execute(
-                           $supertype_t, this, Val($name_quote),
+                           $supertype_t, $(esc(:this)), Val($name_quote),
                            args2...; kw_args2...
                        )
                    end
             )
         end
-        body = :( let $(esc(:SUPER)) = $(esc(super_impl_expr)); $body; end )
+        body = quote
+            $(esc(:SUPER)) = $super_impl_expr
+            $body
+        end
         # If the original promise specified a return type, explicitly check for that.
         if supertype_t != AbstractComponent
             promised_return_type = component_macro_promised_return_type(supertype_t, Val(promise_name))
-            if exists(promised_return_type)
+            # Special case: if supposed to return Nothing, just discard the underlying return value.
+            # Otherwise code is frustrating to write because
+            #    Julia automatically returns the last statement.
+            if promised_return_type == Nothing
+                body = quote
+                    result = $body
+                    nothing
+                end
+            elseif exists(promised_return_type)
                 body = quote
                     result = $body
                     if !isa(result, $promised_return_type)
@@ -801,10 +813,11 @@ function macro_impl_component(title_data::SplitType, supertype_t::Optional{Type}
             end
         end
         # Set up the local variables 'entity' and 'world'.
-        body = :( let $(esc(:entity)) = $(esc(:this)).entity,
-                      $(esc(:world)) = $(esc(:this)).world
+        body = quote
+            $(esc(:entity)) = $(esc(:this)).entity
+            $(esc(:world)) = $(esc(:this)).world
             $body
-        end )
+        end
 
         emit_macro_interface_impl(:component_macro_promise_execute, body,
             extra_args = (
@@ -865,21 +878,32 @@ function macro_impl_component(title_data::SplitType, supertype_t::Optional{Type}
                    # If no arguments were passed explicitly, pass them all through implicitly.
                    if isempty(args2) && isempty(kw_args2)
                        $(@__MODULE__).component_macro_configurable_execute(
-                           $supertype_t, this, Val($name_quote),
+                           $supertype_t, $(esc(:this)), Val($name_quote),
                            args...; kw_args...
                        )
                    else
                        $(@__MODULE__).component_macro_configurable_execute(
-                           $supertype_t, this, Val($name_quote),
+                           $supertype_t, $(esc(:this)), Val($name_quote),
                            args2...; kw_args2...
                        )
                    end )
         end
-        body = :( let $(esc(:SUPER)) = $(esc(super_impl_expr)); $body; end )
+        body = quote
+            $(esc(:SUPER)) = $super_impl_expr
+            $body
+        end
         # If the original definition specified a return type, explicitly check for that.
         if supertype_t != AbstractComponent
             configured_return_type = component_macro_configurable_return_type(supertype_t, Val(configurable_name))
-            if exists(configured_return_type)
+            # Special case: if supposed to return Nothing, just discard the underlying return value.
+            # Otherwise code is frustrating to write because
+            #    Julia automatically returns the last statement.
+            if configured_return_type == Nothing
+                body = quote
+                    result = $body
+                    nothing
+                end
+            elseif exists(configured_return_type)
                 body = quote
                     result = $body
                     if !isa(result, $configured_return_type)
@@ -893,10 +917,11 @@ function macro_impl_component(title_data::SplitType, supertype_t::Optional{Type}
             end
         end
         # Set up the local variables 'entity' and 'world'.
-        body = :( let $(esc(:entity)) = $(esc(:this)).entity,
-                      $(esc(:world)) = $(esc(:this)).world
-                    $body
-                end )
+        body = quote
+            $(esc(:entity)) = $(esc(:this)).entity
+            $(esc(:world)) = $(esc(:this)).world
+            $body
+        end
 
         emit_macro_interface_impl(:component_macro_configurable_execute, body,
             extra_args = (

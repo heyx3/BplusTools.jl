@@ -1,4 +1,5 @@
 # Test type parameters and their interaction with other features.
+BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
 
 world = World()
 en = add_entity(world)
@@ -125,6 +126,43 @@ remove_entity(world, en)
 @bp_check(c_Ba.str == "parent", c_Ba)
 @bp_check(c_Bb.str == "parent", c_Bb)
 @bp_check(c_Bb.t == zero(v3f), c_Bb)
+# Add the entity back for future tests.
+en = add_entity(world)
 
 
-#TODO: C{T} component to test the parent type being generic
+# Define "C" components to test a generic parent type.
+println("#TODO: Test builtin functions and their inheritance")
+println("#TODO: Test @promise and @configurable that have their own type params")
+println("#TODO: Test a child type happening to use the same type param name as its parent type, for a different purpose")
+@component C{I<:Integer} {abstract} begin
+    i::I
+    DEFAULT() = Ca() #TODO: Try adding parameters to DEFAULT
+    @configurable con(j)::Nothing = (this.i += convert(I, j))
+    @promise get()::I
+end
+@component Ca <: C{Int16} begin
+    CONSTRUCT(i = -16) = SUPER(Int16(i))
+    get() = -this.i
+end
+@component Cb{J} <: C{J} begin
+    get() = this.i
+    con(j) = (this.i -= j)
+end
+c_C = add_component(en, C{Int64})
+c_Ca = add_component(en, Ca, 256)
+c_Cb = add_component(en, Cb{UInt32}, 0x3456)
+@bp_check(c_C isa Ca, c_C)
+@bp_check(c_C.i === Int16(-16), c_C)
+@bp_check(c_Ca.i === Int16(256), c_Ca)
+@bp_check(c_Cb.i === UInt32(0x3456))
+@bp_check(c_C.get() === Int16(16), c_C.get())
+@bp_check(c_Ca.get() === Int16(-256), c_Ca.get())
+@bp_check(c_Cb.get() === UInt32(0x3456), c_Cb.get())
+c_C.con(3)
+c_Ca.con(4)
+c_Cb.con(5)
+@bp_check(c_C.i === Int16(-13), c_C)
+@bp_check(c_Ca.i === Int16(260), c_Ca)
+@bp_check(c_Cb.i === UInt32(0x3456) - UInt32(5), c_Cb)
+
+#TODO: Test generic requirements, like {require: C{I}}

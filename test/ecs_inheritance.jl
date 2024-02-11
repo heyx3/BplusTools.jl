@@ -87,6 +87,7 @@ maneuver = add_component(entity, Maneuver)
             world.entity_lookup, "\n\n",
             world.component_counts)
 @bp_check(has_component(entity, StrafingManeuver))
+@bp_check(has_component(entity, Maneuver))
 @bp_check(maneuver.duration === @f32(6.0), maneuver)
 @bp_check(maneuver.progress_normalized == 0, maneuver)
 @bp_check(maneuver.pos_component == pos, maneuver)

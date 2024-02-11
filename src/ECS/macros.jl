@@ -13,7 +13,7 @@ component_macro_init(T::Type{<:AbstractComponent}, ::AbstractComponent,
                      args...; kw_args...) = error(
     "Arguments do not match in call: ", T, ".CONSTRUCT(",
         join(("::$(typeof(a))" for a in args), ", "),
-        " ; ", join(("$n=::$(typeof(v))" for (n, v) in kw_args), ", "),
+        " ; ", join(("$n=::$(typeof(v))" for (n, v) in pairs(kw_args)), ", "),
     ")"
 )
 component_macro_cleanup(    ::Type{<:AbstractComponent}, ::AbstractComponent, ::Bool) = error()
@@ -22,25 +22,28 @@ component_macro_finish_tick(::Type{<:AbstractComponent}, ::AbstractComponent    
 #    Promises:
 component_macro_all_promises(::Type{<:AbstractComponent}) = () # Symbols
 component_macro_unimplemented_promises(::Type{<:AbstractComponent}) = () # Symbols
-component_macro_implements_promise(::Type{<:AbstractComponent}, ::Val)::Bool = false # Passes down to child types
-                                                                                     #    (returns true if parent returns true)
 component_macro_promised_return_type(::Type{<:AbstractComponent}, # The concrete type of the component
                                                                   #   that first declared this @promise
                                      ::Val, # The name of the @promise
-                                     error() #TODO: Provide a tuple of the ordered parameter types
-                                    ) = error() # Returns the type (not an expr), or `nothing`
+                                     # The args and kw_args are needed
+                                     #    in case the return type is in terms of them
+                                     args...
+                                     ; kw_args...
+                                    )::Optional{Type} = error()
 component_macro_promise_execute(T::Type{<:AbstractComponent}, ::AbstractComponent, v::Val,
                                 args...; kw_args...) = error(
     "No parent implementation exists for @promise ", val_type(v), "(...)"
 )
 #    Configurables:
-component_macro_overridable_configurables(::Type{<:AbstractComponent}) = () # Symbols
-component_macro_overrides_configurable(::Type{<:AbstractComponent}, ::Val)::Bool = false # Passes down to child types
-                                                                                         #    (returns true if parent returns true)
-component_macro_configurable_return_type(::Type{<:AbstractComponent}, ::Val
-                                         type_params... # Component type params,
-                                                        #    followed by @promise type params
-                                        )::Type = error()
+component_macro_all_configurables(::Type{<:AbstractComponent}) = () # Symbols
+component_macro_configurable_return_type(::Type{<:AbstractComponent}, # The concrete type of the component
+                                                                      #   that first declared this @promise
+                                         ::Val, # The name of the @configurable
+                                         # The args and kw_args are needed
+                                         #    in case the return type is in terms of them
+                                         args...
+                                         ; kw_args...
+                                        )::Optional{Type} = error()
 component_macro_configurable_execute(::Type{<:AbstractComponent},::AbstractComponent, v::Val,
                                      args...; kw_args...) = error(
     "No parent implementation exists for @configurable ", val_type(v), "(...)"
@@ -439,7 +442,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
             elseif func_data.name in component_macro_unimplemented_promises(supertype_t)
                 @bp_check(!func_data.generated, "@generated @promise is currently unsupported")
                 push!(implemented_promises, func_data)
-            elseif func_data.name in component_macro_overridable_configurables(supertype_t)
+            elseif func_data.name in component_macro_all_configurables(supertype_t)
                 @bp_check(!func_data.generated, "@generated @configurable is currently unsupported")
                 push!(implemented_configurables, func_data)
             else
@@ -466,7 +469,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                 func_data = SplitDef(:( $(macro_data.args[1]) = nothing ))
                 func_data.doc_string = doc_string
                 if func_data.name in (component_macro_unimplemented_promises(supertype_t)...,
-                                      component_macro_overridable_configurables(supertype_t)...)
+                                      component_macro_all_configurables(supertype_t)...)
                     error("@promise hides inherited @promise or @configurable: '", func_data.name, "'")
                 end
 
@@ -486,7 +489,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                 func_data = SplitDef(macro_data.args[1])
                 func_data.doc_string = doc_string
                 if func_data.name in (component_macro_unimplemented_promises(supertype_t)...,
-                                      component_macro_overridable_configurables(supertype_t)...)
+                                      component_macro_all_configurables(supertype_t)...)
                     error("@configurable hides inherited @promise or @configurable: '", func_data.name, "'")
                 end
 
@@ -507,7 +510,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
 
     # Take fields from the parent, after the new ones.
     if supertype_t != AbstractComponent
-        append!(field_data, component_macro_field_exprs(supertype_t, supertype_params))
+        append!(field_data, component_macro_field_exprs(supertype_t, supertype_params...))
     end
 
     # Post-process the statement data.
@@ -534,7 +537,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
 
     # Process configurable data for code generation.
     all_configurable_names::Vector{Symbol} = [
-        component_macro_overridable_configurables(supertype_t)...,
+        component_macro_all_configurables(supertype_t)...,
         (tup[2].name for tup in new_configurables)...
     ]
 
@@ -615,7 +618,8 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                                            runtime_type_param_exprs,
                                        ) = @ano_value(compiled_type_params),
                                        # The component Type param can be specific or broad (using `<:`).
-                                       broaden_component_type::Bool = false)
+                                       broaden_component_type::Bool = false,
+                                       force_inline::Bool = false)
         # Generate the expression for the component Type.
         component_t = if typing_mode isa @ano_enum(no_type_params, runtime_type_param_exprs)
             esc(component_without_type_params)
@@ -631,7 +635,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         end
 
         # If using runtime type params, insert them at the beginning of the argument list.
-        args = esc.(extra_args)
+        args = extra_args
         if typing_mode isa @ano_enum(runtime_type_param_exprs)
             args = tuple(
                 esc.(type_param_names)...,
@@ -665,9 +669,12 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                                      ) where {$(compile_time_type_params...)} = $body
         ))
 
-        # Inject a return type if one exists.
+        # Inject data as requested.
         if exists(return_type)
             func_def.return_type = esc(return_type)
+        end
+        if force_inline
+            func_def.inline = true
         end
 
         push!(global_decls, combinedef(func_def))
@@ -689,7 +696,6 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
             $(esc.(all_supertypes_youngest_first_exprs)...)
         ) ),
         typing_mode = @ano_value(runtime_type_param_exprs)
-        take_type_params_as_exprs=true
     )
     emit_macro_interface_impl(:component_macro_init,
         # If using an auto-generated constructor,
@@ -826,41 +832,55 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         typing_mode = @ano_value(no_type_params),
         broaden_component_type = true
     )
-    for p_def in implemented_promises; emit_macro_interface_impl(:component_macro_implements_promise,
-        true,
-        extra_args = tuple(
-            :( ::Val{$(QuoteNode(p_def.name))} )
-        ),
-        typing_mode = @ano_value(no_type_params),
-        broaden_component_type = true
-    ) end
     for (source, def) in new_promises; emit_macro_interface_impl(:component_macro_promised_return_type,
         esc(def.return_type),
         extra_args = tuple(
-            :( ::Val{$(QuoteNode(def.name))} )
+            :( ::Val{$(QuoteNode(def.name))} ),
+            esc.(combine_expr.(def.args))...
+        ),
+        extra_kw_args = tuple(
+            esc.(combine_expr.(def.kw_args))...
         ),
         extra_where_params = def.where_params,
-        broaden_component_type = true
+        broaden_component_type = true,
+        force_inline = true # Really want the return value to be a compile-time constant when possible
     ) end
     for def in implemented_promises # :component_macro_promise_execute
         def = SplitDef(def)
 
-        # Cache internal data.
+        # Cache user definitions.
         promise_name = def.name
         name_quote = QuoteNode(promise_name)
         name_str = string(promise_name)
-        promise_args::Vector{SplitArg} = copy(def.args)
+        promise_args::Vector{SplitArg} = SplitArg.(def.args)
+        promise_kw_args::Vector{SplitArg} = SplitArg.(def.kw_args)
 
-        # Wrap the promise function in our internal macro interface.
+        # Wrap the user definitions in our internal macro interface.
         def.name = :( $(@__MODULE__).component_macro_promise_execute )
-        insert!(def.args, 1, :( T::Type{<:$component_with_type_params} ))
-        insert!(def.args, 2, :( $(esc(:this))::Type{$component_with_type_params} ))
-        insert!(def.args, 3, :( ::Val{$name_quote} ))
+        if exists(def.return_type)
+            def.return_type = esc(def.return_type)
+        end
+        for a in def.args
+            a.is_escaped = true
+        end
+        for kw in def.kw_args
+            kw.is_escaped = true
+        end
+        for t in def.where_params
+            t.is_escaped = true
+        end
+        insert!(def.args, 1, SplitArg(:( T::Type{<:$(esc(component_with_type_params))} )))
+        insert!(def.args, 2, SplitArg(:( $(esc(:this))::$(esc(component_with_type_params)) )))
+        insert!(def.args, 3, SplitArg(:( ::Val{$name_quote} )))
         def.where_params = [
-            SplitType.(type_param_names)...
+            SplitType.(esc.(type_param_names))...
             def.where_params...
         ]
         def.body = esc(def.body)
+
+        # Wrap the body in a lambda to stop 'return' statements
+        #    from skipping over our internal logic.
+        def.body = :( (() -> $(def.body))() )
 
         # Provide access to 'entity' and 'world'.
         def.body = quote
@@ -877,22 +897,24 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                 :( $(@__MODULE__).component_macro_promise_execute(
                     $supertype_concrete_expr, $(esc(:this)), Val($name_quote),
                     $((esc(a.name) for a in promise_args)...)
-                    ; $((combine_expr(SplitArg(a.name, :Any))
-                           for a in def.kw_args)...)
-                      $((esc(:( $(a.name) = $(a.name) )) for a in def.kw_args)...)
+                    ; $((if a.is_splat
+                             :( $(esc(a.name))... )
+                         else
+                             :( $(esc(a.name)) = $(esc(a.name)) )
+                         end for a in promise_kw_args)...)
                 ) ),
                 nothing, [ ],
                 nothing, false, false, false
             )))
             # The user may also pass different arguments when invoking the parent's implementation.
-            $(if length(promise_args) + length(def.kw_args) > 0
+            $(if length(promise_args) + length(promise_kw_args) > 0
                 combine_expr(SplitDef(
                     esc(:SUPER),
                     # Un-escaped versions of the argument names
                     #    won't conflict with the original outer ones,
                     #    which are escaped.
-                    [ SplitDef(:( args... )) ],
-                    [ SplitDef(:( kw_args... )) ],
+                    [ SplitArg(:( args... )) ],
+                    [ SplitArg(:( kw_args... )) ],
                     :( $(@__MODULE__).component_macro_promise_execute(
                         $supertype_concrete_expr, $(esc(:this)), Val($name_quote),
                         args...; kw_args...
@@ -907,129 +929,168 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
             $(def.body)
         end
 
-        # If the original promise specified a return type, explicitly check for that
-        #    regardless of the return type promised by this child implementation
-        #    (which will get checked by Julia on return).
+        # If the original promise specified a return type, explicitly check for that.
+        # The return type promised by this child implementation will get checked by Julia on return.
+        return_type_call = SplitDef(:(
+            $(@__MODULE__).component_macro_promised_return_type($(esc(component_with_type_params)),
+                                                                Val($name_quote))
+        ))
+        append!(return_type_call.args,
+                SplitArg(esc(a.name)) for a in promise_args)
+        append!(return_type_call.kw_args,
+                SplitArg(if a.is_splat
+                             :( $(esc(a.name))... )
+                         else
+                             :( $(esc(a.name)) = $(esc(a.name)) )
+                        end) for a in promise_kw_args)
+        return_type_call_expr = combine_expr(return_type_call)
         def.body = quote
             result = $(def.body)
-            let T = $(@__MODULE__).component_macro_promised_return_type($component_with_type_params,
-                                                                        Val($name_quote))
-                if exists(T) && !isa(result, T)
+            let T = $return_type_call_expr
+                if isnothing(T) || (result isa T)
+                    return result
+                elseif T == Nothing
+                    return nothing
+                else
                     error("@promise ", $(name_str), " should return ",
                             T, ", but returned ", typeof(result))
                 end
             end
-            result
         end
 
         push!(global_decls, combine_expr(def))
     end
-error("#TODO: Resume from here after fixing last issue with promises")
     # Configurables:
-    emit_macro_interface_impl(:component_macro_overridable_configurables, Tuple(all_configurable_names))
-    for c_def in implemented_configurables; emit_macro_interface_impl(:component_macro_overrides_configurable,
-        true,
-        extra_args = tuple(
-            :( ::Val{$(QuoteNode(c_def.name))} )
-        )
-    ) end
+    emit_macro_interface_impl(:component_macro_all_configurables, Tuple(all_configurable_names),
+                              typing_mode = @ano_value(no_type_params),
+                              broaden_component_type = true)
     for (source, def) in new_configurables; emit_macro_interface_impl(:component_macro_configurable_return_type,
         esc(def.return_type),
         extra_args = tuple(
-            :( ::Val{$(QuoteNode(def.name))} )
+            :( ::Val{$(QuoteNode(def.name))} ),
+            esc.(combine_expr.(def.args))...
         ),
-        extra_where_params = def.where_params
+        extra_kw_args = tuple(
+            esc.(combine_expr.(def.kw_args))...
+        ),
+        extra_where_params = def.where_params,
+        broaden_component_type = true,
+        force_inline = true # Really want the return value to be a compile-time constant when possible
     ) end
-    for def in implemented_configurables
+    for def in implemented_configurables # :component_macro_configurable_execute
+        def = SplitDef(def)
+
+        # Cache user definitions.
         configurable_name = def.name
         name_quote = QuoteNode(configurable_name)
         name_str = string(configurable_name)
+        configurable_args::Vector{SplitArg} = SplitArg.(def.args)
+        configurable_kw_args::Vector{SplitArg} = SplitArg.(def.kw_args)
 
-        # Generate the full body.
-        # Unpack the arguments from 'args...' and 'kw_args...'.
-        # Do this unpacking through a lambda call,
-        #    which has the added benefit of turning any 'return' statements into expression outputs.
-        body_lambda = SplitDef(def)
-        body_lambda.name = nothing
-        body_lambda.return_type = nothing
-        body = quote
-            runner = $(esc(combinedef(body_lambda)))
-            runner(args...; kw_args...)
-        end
+        # Wrap the user definitions in our internal macro interface.
+        def.name = :( $(@__MODULE__).component_macro_configurable_execute )
         if exists(def.return_type)
-            body = :( $body::$(esc(def.return_type)) )
+            def.return_type = esc(def.return_type)
         end
+        for a in def.args
+            a.is_escaped = true
+        end
+        for kw in def.kw_args
+            kw.is_escaped = true
+        end
+        for t in def.where_params
+            t.is_escaped = true
+        end
+        insert!(def.args, 1, SplitArg(:( T::Type{<:$(esc(component_with_type_params))} )))
+        insert!(def.args, 2, SplitArg(:( $(esc(:this))::$(esc(component_with_type_params)) )))
+        insert!(def.args, 3, SplitArg(:( ::Val{$name_quote} )))
+        def.where_params = [
+            SplitType.(esc.(type_param_names))...
+            def.where_params...
+        ]
+        def.body = esc(def.body)
+
+        # Wrap the body in a lambda to stop 'return' statements
+        #    from skipping over our internal logic.
+        def.body = :( (() -> $(def.body))() )
+
+        # Provide access to 'entity' and 'world'.
+        def.body = quote
+            $(esc(:entity)) = $(esc(:this)).entity
+            $(esc(:world)) = $(esc(:this)).world
+            $(def.body)
+        end
+
         # Provide access to SUPER(), which invokes the supertype's implementation.
-        # Obviously this can only be provided if a supertype *has* an implementation.
-        first_implementing_parent_idx = findfirst(
-            t -> component_macro_overrides_configurable(t, Val(configurable_name)),
-            enumerate_as_pair(Iterators.drop(all_supertypes_youngest_first, 1))
-        )
-        super_impl_expr = if isnothing(first_implementing_parent_idx)
-            :( (a...; b...) -> error("No supertype implementation exists for @configurable ", $name_str) )
-        else
-            :( @inline (args2...; kw_args2...) ->
-                   # If no arguments were passed explicitly, pass them all through implicitly.
-                   if isempty(args2) && isempty(kw_args2)
-                       $(@__MODULE__).component_macro_configurable_execute(
-                           $supertype_t, $(esc(:this)), Val($name_quote),
-                           args...; kw_args...
-                       )
-                   else
-                       $(@__MODULE__).component_macro_configurable_execute(
-                           $supertype_t, $(esc(:this)), Val($name_quote),
-                           args2...; kw_args2...
-                       )
-                   end )
+        def.body = quote
+            # The 0-argument SUPER() executes the parent's implementation with the same parameters.
+            $(combine_expr(SplitDef(
+                esc(:SUPER), [ ], [ ],
+                :( $(@__MODULE__).component_macro_configurable_execute(
+                    $supertype_concrete_expr, $(esc(:this)), Val($name_quote),
+                    $((esc(a.name) for a in configurable_args)...)
+                    ; $((if a.is_splat
+                             :( $(esc(a.name))... )
+                         else
+                             :( $(esc(a.name)) = $(esc(a.name)) )
+                         end for a in configurable_kw_args)...)
+                ) ),
+                nothing, [ ],
+                nothing, false, false, false
+            )))
+            # The user may also pass different arguments when invoking the parent's implementation.
+            $(if length(configurable_args) + length(configurable_kw_args) > 0
+                combine_expr(SplitDef(
+                    esc(:SUPER),
+                    # Un-escaped versions of the argument names
+                    #    won't conflict with the original outer ones,
+                    #    which are escaped.
+                    [ SplitArg(:( args... )) ],
+                    [ SplitArg(:( kw_args... )) ],
+                    :( $(@__MODULE__).component_macro_configurable_execute(
+                        $supertype_concrete_expr, $(esc(:this)), Val($name_quote),
+                        args...; kw_args...
+                    ) ),
+                    nothing, [ ],
+                    nothing, false, false, false
+                ))
+            else
+                :( )
+            end)
+            # Now execute the child implementation with access to SUPER() defined above.
+            $(def.body)
         end
-        body = quote
-            $(esc(:SUPER)) = $super_impl_expr
-            $body
-        end
-        # If the original definition specified a return type, explicitly check for that.
-        if supertype_t != AbstractComponent
-            configured_return_type = component_macro_configurable_return_type(supertype_t, Val(configurable_name))
-            # Special case: if supposed to return Nothing, just discard the underlying return value.
-            # Otherwise code is frustrating to write because
-            #    Julia automatically returns the last statement.
-            if configured_return_type == Nothing
-                body = quote
-                    result = $body
-                    nothing
-                end
-            elseif exists(configured_return_type)
-                body = quote
-                    result = $body
-                    if !isa(result, $configured_return_type)
-                        error($(string(component_without_type_params)), ".", $(string(configurable_name)),
-                                " doesn't return a ", $(string(configured_return_type)),
-                                "! It returned a ", typeof(result))
-                    else
-                        result
-                    end
+
+        # If the original configurable specified a return type, explicitly check for that.
+        # The return type given by this child implementation will get checked by Julia on return.
+        return_type_call = SplitDef(:(
+            $(@__MODULE__).component_macro_configurable_return_type($(esc(component_with_type_params)),
+                                                                    Val($name_quote))
+        ))
+        append!(return_type_call.args,
+                SplitArg(esc(a.name)) for a in configurable_args)
+        append!(return_type_call.kw_args,
+                SplitArg(if a.is_splat
+                             :( $(esc(a.name))... )
+                         else
+                             :( $(esc(a.name)) = $(esc(a.name)) )
+                        end) for a in configurable_kw_args)
+        return_type_call_expr = combine_expr(return_type_call)
+        def.body = quote
+            result = $(def.body)
+            let T = $return_type_call_expr
+                if isnothing(T) || (result isa T)
+                    return result
+                elseif T === Nothing
+                    return nothing
+                else
+                    error("@configurable ", $(name_str), " should return ",
+                            T, ", but returned ", typeof(result))
                 end
             end
         end
-        # Set up the local variables 'entity' and 'world'.
-        body = quote
-            $(esc(:entity)) = $(esc(:this)).entity
-            $(esc(:world)) = $(esc(:this)).world
-            $body
-        end
 
-        emit_macro_interface_impl(:component_macro_configurable_execute, body,
-            extra_args = (
-                :( $(esc(:this))::$(esc(component_with_type_params)) ),
-                :( ::Val{$name_quote} ),
-                :( args... )
-            ),
-            extra_kw_args = [
-                :( kw_args... )
-            ],
-            extra_where_params = def.where_params,
-            return_type = def.return_type,
-            broaden_component_type = is_abstract
-        )
+        push!(global_decls, combine_expr(def))
     end
 
     # Implement promises and configurables as properties.
@@ -1089,7 +1150,7 @@ error("#TODO: Resume from here after fixing last issue with promises")
                                                               ) =
                                  tuple($(esc.(requirements)...)))
             sd = SplitDef(inner_def)
-            sd.where_params =  Tuple(esc_type_param_names)
+            sd.where_params = SplitType.(esc_type_param_names)
             combinedef(sd)
         end)
         $(let inner_def = :( $(@__MODULE__).create_component(::Type{$(esc(component_with_type_params))},
@@ -1097,7 +1158,7 @@ error("#TODO: Resume from here after fixing last issue with promises")
                                                              args...; kw_args...
                                                             ) )
             sd = SplitDef(inner_def)
-            sd.where_params = Tuple(esc_type_param_names)
+            sd.where_params = SplitType.(esc_type_param_names)
             sd.body = quote
                 if $is_abstract
                     $(if isnothing(defaultor)
@@ -1125,10 +1186,10 @@ error("#TODO: Resume from here after fixing last issue with promises")
                                                               is_entity_dying::Bool)
                            )
             sd = SplitDef(inner_def)
-            sd.where_params = Tuple(esc_type_param_names)
+            sd.where_params = SplitType.(esc_type_param_names)
             sd.body = quote
                 @bp_ecs_assert(c.entity == e, "Given the wrong entity")
-                $(map(all_supertypes_youngest_first) do T
+                $(map(all_supertypes_youngest_first_exprs) do T
                     :( $(@__MODULE__).component_macro_cleanup($(esc(T)), c, is_entity_dying) )
                 end...)
                 return nothing
@@ -1139,13 +1200,13 @@ error("#TODO: Resume from here after fixing last issue with promises")
                                                            e::$Entity)
                            )
             sd = SplitDef(inner_def)
-            sd.where_params = Tuple(esc_type_param_names)
+            sd.where_params = SplitType.(esc_type_param_names)
             sd.body = quote
                 @bp_ecs_assert(c.entity == e, "Given the wrong entity")
-                $(map(all_supertypes_oldest_first) do T
+                $(map(all_supertypes_oldest_first_exprs) do T
                     :( $(@__MODULE__).component_macro_tick($(esc(T)), c) )
                 end...)
-                $(map(all_supertypes_youngest_first) do T
+                $(map(all_supertypes_youngest_first_exprs) do T
                     :( $(@__MODULE__).component_macro_finish_tick($(esc(T)), c) )
                 end...)
                 return nothing

@@ -8,13 +8,13 @@ component_macro_types_to_oldest_exprs(::Type{<:AbstractComponent}) = () # Takes 
                                                                         # Returns the type and its parent types, youngest to oldest,
                                                                         #    not including AbstractComponent.
 #    Standard events:
-component_macro_init(T::Type{<:AbstractComponent}, ::AbstractComponent,
+component_macro_init(T::Type{<:AbstractComponent}, c::AbstractComponent,
                      entity::Entity, world::World,
                      args...; kw_args...) = error(
     "Arguments do not match in call: ", T, ".CONSTRUCT(",
         join(("::$(typeof(a))" for a in args), ", "),
         " ; ", join(("$n=::$(typeof(v))" for (n, v) in pairs(kw_args)), ", "),
-    ")"
+    "). Component type: ", typeof(c)
 )
 component_macro_cleanup(    ::Type{<:AbstractComponent}, ::AbstractComponent, ::Bool) = error()
 component_macro_tick(       ::Type{<:AbstractComponent}, ::AbstractComponent        ) = error()
@@ -619,7 +619,9 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                                        ) = @ano_value(compiled_type_params),
                                        # The component Type param can be specific or broad (using `<:`).
                                        broaden_component_type::Bool = false,
-                                       force_inline::Bool = false)
+                                       force_inline::Bool = false,
+                                       # If true, logs the generated code to stderr.
+                                       debug_dump::Bool = false)
         # Generate the expression for the component Type.
         component_t = if typing_mode isa @ano_enum(no_type_params, runtime_type_param_exprs)
             esc(component_without_type_params)
@@ -677,7 +679,16 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
             func_def.inline = true
         end
 
-        push!(global_decls, combinedef(func_def))
+        final_emission = combinedef(func_def)
+        push!(global_decls, final_emission)
+        if debug_dump
+            println(stderr, "\n\n", func_name, " for ", component_type_decl.name, ":")
+            println(stderr, MacroTools.postwalk(e -> (isexpr(e, :escape) ? e.args[1] : e), prettify(final_emission)))
+            println("\n\nDump: ")
+            dump(stderr, final_emission, maxdepth=50)
+            println("\nEND\n\n")
+        end
+        return final_emission
     end
     emit_macro_interface_impl(:component_macro_field_exprs,
         :( tuple(
@@ -692,9 +703,30 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         broaden_component_type = true
     )
     emit_macro_interface_impl(:component_macro_types_to_oldest_exprs,
-        :( tuple(
-            $(esc.(all_supertypes_youngest_first_exprs)...)
-        ) ),
+        esc(:( tuple(
+            # NOTE: this is inside the function body.
+            # The function itself is returning an AST.
+
+            # The first type is the component itself.
+            if $(isempty(type_param_names))
+                $(QuoteNode(component_without_type_params))
+            else
+                Expr(:curly,
+                    $(QuoteNode(component_without_type_params)),
+                    $(type_param_names...)
+                )
+            end,
+
+            # Next, recursively call the the parent type's implementation.
+            if $(supertype_t == AbstractComponent)
+                ()
+            else
+                $(@__MODULE__).component_macro_types_to_oldest_exprs(
+                    $supertype_t,
+                    $(supertype_params...)
+                )
+            end...
+        ) )),
         typing_mode = @ano_value(runtime_type_param_exprs)
     )
     emit_macro_interface_impl(:component_macro_init,
@@ -719,7 +751,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                     n_super_calls::Int = 0
                     @inline $(esc(:SUPER))(args...; kw_args...) = begin
                         n_super_calls += 1
-                        $(@__MODULE__).component_macro_init($supertype_t,
+                        $(@__MODULE__).component_macro_init($supertype_concrete_expr,
                                                             $(esc(:this)), $(esc(:entity)), $(esc(:world)),
                                                             args...; kw_args...)
                     end
@@ -1144,8 +1176,8 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
     push!(global_decls, quote
         $(@__MODULE__).is_entitysingleton_component(::Type{$(esc(component_broad_type))})::Bool = $is_entity_singleton
         $(@__MODULE__).is_worldsingleton_component(::Type{$(esc(component_broad_type))})::Bool = $is_world_singleton
-        # For methods that might want type params,
-        #    conditionally add them (adding an empty {} statement confuses the parser).
+        # For methods that might want type params, conditionally add them.
+        # Adding an empty {} statement unfortunately confuses the parser.
         $(let inner_def = :( $(@__MODULE__).require_components(::Type{$(esc(component_with_type_params))}
                                                               ) =
                                  tuple($(esc.(requirements)...)))
@@ -1166,9 +1198,9 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                                      "'; it's abstract and no DEFAULT() was provided") )
                       else
                           :( return $(@__MODULE__).create_component(
-                            $(esc(defaultor[1])), entity,
-                            $(esc.(defaultor[2])...)
-                            ; $(esc.(defaultor[3])...)
+                                $(esc(defaultor[1])), entity,
+                                $(esc.(defaultor[2])...)
+                                ; $(esc.(defaultor[3])...)
                           ) )
                       end)
                 else

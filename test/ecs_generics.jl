@@ -148,7 +148,8 @@ end
     get() = this.i
     con(j) = (this.i -= j)
 end
-c_C = add_component(en, C{Int64})
+@bp_check_throws(add_component(en, C{Int64}), "Default `C` is a C{Int16}")
+c_C = add_component(en, C)
 c_Ca = add_component(en, Ca, 256)
 c_Cb = add_component(en, Cb{UInt32}, 0x3456)
 @bp_check(c_C isa Ca, c_C)

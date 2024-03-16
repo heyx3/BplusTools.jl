@@ -1,3 +1,4 @@
+
 # Component1 is not a singleton, and requires a Component2.
 @component Component1 {require: Component2} begin
     i::Int

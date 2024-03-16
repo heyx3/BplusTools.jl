@@ -68,6 +68,8 @@ component_field_print(component, field_name::Val, field_value::World, io) = prin
 
 "To see the printout of new defined components, set this to some output stream"
 PRINT_COMPONENT_CODE::Optional{IO} = nothing
+"If `PRINT_COMPONENT_CODE` is set, this global will hold the generated expression that was printed"
+COMPONENT_CODE::Optional = nothing
 
 """
 A very covenient way to define a component.
@@ -199,6 +201,11 @@ function strafe(s::StrafingManeuver, time_step)
     s.pos_component.value += s.speed_component.value * time_step * s.dir
 end
 ````
+
+As a complement to the usual reflection data provided by Julia,
+    you may access component reflection data (such as the declared `@promise`s)
+    through the interface at the top of this file, *src/ecs/macros.jl*.
+However note that this is an internal interface which may change in the future.
 """
 macro component(title, elements...)
     # Parse the component's name and parent type.
@@ -297,7 +304,8 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                 is_world_singleton = true
             end
         elseif @capture(attribute, {require:a_, b__})
-            requirements = Any[a, b...]
+            push!(requirements, a)
+            append!(requirements, b)
         else
             error("Unexpected attribute: ", attribute)
         end
@@ -309,7 +317,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
     elseif isempty(supertype_params)
         supertype_t
     else
-        :( $supertype_t{$(esc.(supertype_params)...)} )
+        :( $supertype_t{$(supertype_params...)} )
     end
     if exists(supertype_t)
         if is_entitysingleton_component(supertype_t)
@@ -751,7 +759,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                     n_super_calls::Int = 0
                     @inline $(esc(:SUPER))(args...; kw_args...) = begin
                         n_super_calls += 1
-                        $(@__MODULE__).component_macro_init($supertype_concrete_expr,
+                        $(@__MODULE__).component_macro_init($(esc(supertype_concrete_expr)),
                                                             $(esc(:this)), $(esc(:entity)), $(esc(:world)),
                                                             args...; kw_args...)
                     end
@@ -927,7 +935,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
             $(combine_expr(SplitDef(
                 esc(:SUPER), [ ], [ ],
                 :( $(@__MODULE__).component_macro_promise_execute(
-                    $supertype_concrete_expr, $(esc(:this)), Val($name_quote),
+                    $(esc(supertype_concrete_expr)), $(esc(:this)), Val($name_quote),
                     $((esc(a.name) for a in promise_args)...)
                     ; $((if a.is_splat
                              :( $(esc(a.name))... )
@@ -948,7 +956,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                     [ SplitArg(:( args... )) ],
                     [ SplitArg(:( kw_args... )) ],
                     :( $(@__MODULE__).component_macro_promise_execute(
-                        $supertype_concrete_expr, $(esc(:this)), Val($name_quote),
+                        $(esc(supertype_concrete_expr)), $(esc(:this)), Val($name_quote),
                         args...; kw_args...
                     ) ),
                     nothing, [ ],
@@ -1059,7 +1067,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
             $(combine_expr(SplitDef(
                 esc(:SUPER), [ ], [ ],
                 :( $(@__MODULE__).component_macro_configurable_execute(
-                    $supertype_concrete_expr, $(esc(:this)), Val($name_quote),
+                    $(esc(supertype_concrete_expr)), $(esc(:this)), Val($name_quote),
                     $((esc(a.name) for a in configurable_args)...)
                     ; $((if a.is_splat
                              :( $(esc(a.name))... )
@@ -1080,7 +1088,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                     [ SplitArg(:( args... )) ],
                     [ SplitArg(:( kw_args... )) ],
                     :( $(@__MODULE__).component_macro_configurable_execute(
-                        $supertype_concrete_expr, $(esc(:this)), Val($name_quote),
+                        $(esc(supertype_concrete_expr)), $(esc(:this)), Val($name_quote),
                         args...; kw_args...
                     ) ),
                     nothing, [ ],
@@ -1268,6 +1276,8 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         $(global_decls...)
     end
     if exists(PRINT_COMPONENT_CODE)
+        global COMPONENT_CODE
+        COMPONENT_CODE = final_expr
         print(PRINT_COMPONENT_CODE,
               "\nCOMPONENT ", combinetype(component_type_decl),
               "\n", MacroTools.prettify(final_expr),

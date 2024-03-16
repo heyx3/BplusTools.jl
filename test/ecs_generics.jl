@@ -1,6 +1,3 @@
-# Test type parameters and their interaction with other features.
-BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
-
 world = World()
 en = add_entity(world)
 
@@ -149,7 +146,7 @@ end
     con(j) = (this.i -= j)
 end
 @bp_check_throws(add_component(en, C{Int64}), "Default `C` is a C{Int16}")
-c_C = add_component(en, C)
+c_C = add_component(en, C{Int16})
 c_Ca = add_component(en, Ca, 256)
 c_Cb = add_component(en, Cb{UInt32}, 0x3456)
 @bp_check(c_C isa Ca, c_C)

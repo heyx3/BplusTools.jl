@@ -1,3 +1,5 @@
+# BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
+
 # Simulate an entity maneuvering in different ways.
 # Note that this example comes from @component's doc-string.
 

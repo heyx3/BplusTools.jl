@@ -1,3 +1,5 @@
+BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
+
 world = World()
 en = add_entity(world)
 
@@ -6,8 +8,12 @@ en = add_entity(world)
     i::Int
     @configurable modify_i() = (this.i *= 5)
     @configurable modify_i_2(j) = (this.i -= j)
+    @configurable set_from_type(::Type{J}) where {J<:Integer} = begin
+        this.i = typemin(J)
+    end
 end
 @component Aa <: A begin
+    set_from_type(J) = (this.i = typemax(J))
 end
 @component Ab{j} <: A begin
     floats::NTuple{j, Float32}
@@ -18,6 +24,7 @@ end
         this.i = typemax(I)
         return convert(I, this.i)
     end
+    set_from_type(::Type{J}) where {J} = (this.i = typemax(J) ÷ J(2))
 end
 @component Ad{b} <: A begin
     modify_i() = (b && SUPER())
@@ -61,6 +68,16 @@ c_Ad_no.modify_i_2(7)
 @bp_check(c_Ac.i == (typemax(UInt8)-5), c_Ac)
 @bp_check(c_Ad_yes.i == (12*5)-6, c_Ad_yes)
 @bp_check(c_Ad_no.i == (15)-10, c_Ad_no)
+c_Aa.set_from_type(UInt16)
+c_Ab.set_from_type(UInt16)
+c_Ac.set_from_type(UInt16)
+c_Ad_yes.set_from_type(UInt16)
+c_Ad_no.set_from_type(UInt16)
+@bp_check(c_Aa.i == typemax(UInt16), c_Aa)
+@bp_check(c_Ab.i == typemin(UInt16), c_Ab)
+@bp_check(c_Ac.i == typemax(UInt16) ÷ 2, c_Ac)
+@bp_check(c_Ad_yes.i == typemin(UInt16), c_Ad_yes)
+@bp_check(c_Ad_no.i == typemin(UInt16), c_Ad_no)
 
 # Define "B" components to test promises, and builtin functions.
 @component B {abstract} begin
@@ -87,7 +104,7 @@ end
     end
     stringify_self() = (this.str = "b$T")
     DESTRUCT() = begin
-        this.str = string(T) # Overridden by parent shutdown
+        this.str = string(T) # Should get oerridden by parent shutdown
         this.t = zero(T)
     end
 end
@@ -128,8 +145,7 @@ en = add_entity(world)
 
 
 # Define "C" components to test a generic parent type.
-println("#TODO: Test builtin functions and their inheritance")
-println("#TODO: Test @promise and @configurable that have their own type params")
+println("#TODO: Test a @promise that has its own type params")
 println("#TODO: Test a child type happening to use the same type param name as its parent type, for a different purpose")
 @component C{I<:Integer} {abstract} begin
     i::I

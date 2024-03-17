@@ -1,4 +1,4 @@
-BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
+# BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
 
 world = World()
 en = add_entity(world)
@@ -13,7 +13,7 @@ en = add_entity(world)
     end
 end
 @component Aa <: A begin
-    set_from_type(J) = (this.i = typemax(J))
+    set_from_type(::Type{J}) where {J<:Integer} = (this.i = typemax(J))
 end
 @component Ab{j} <: A begin
     floats::NTuple{j, Float32}
@@ -24,7 +24,7 @@ end
         this.i = typemax(I)
         return convert(I, this.i)
     end
-    set_from_type(::Type{J}) where {J} = (this.i = typemax(J) ÷ J(2))
+    set_from_type(::Type{J}) where {J<:Integer} = (this.i = typemax(J) ÷ J(2))
 end
 @component Ad{b} <: A begin
     modify_i() = (b && SUPER())
@@ -87,6 +87,8 @@ c_Ad_no.set_from_type(UInt16)
 
     "Sets the `str` field to a description of this component"
     @promise stringify_self()::Nothing
+    "Sets the `str` field based on the given integer"
+    @promise stringify_from(i::Integer)::Nothing
 
     TICK() = (this.str *= ".")
     DESTRUCT() = (this.str = "parent")
@@ -94,6 +96,7 @@ end
 @component Ba{T} <: B begin
     t::T
     stringify_self() = (this.str = string(this.t))
+    stringify_from(i) = (this.str = string(i))
     TICK() = (this.str *= string(T))
 end
 @component Bb{T} <: B begin
@@ -102,11 +105,12 @@ end
         SUPER(i)
         (this.t = convert(T, t))
     end
-    stringify_self() = (this.str = "b$T")
     DESTRUCT() = begin
-        this.str = string(T) # Should get oerridden by parent shutdown
+        this.str = string(T) # Should get overridden by parent shutdown
         this.t = zero(T)
     end
+    stringify_self() = (this.str = "b$T")
+    stringify_from(i::I) where {I <: Integer} = (this.str = string(Float64(i) / typemax(I)))
 end
 c_B = add_component(en, B)
 c_Ba = add_component(en, Ba{UInt8}, 5, "uint8")
@@ -134,6 +138,14 @@ tick_world(world, 0.1f0)
 @bp_check(c_Ba.str == "$(5).$UInt8", c_Ba)
 @bp_check(c_Bb.str == "b$v3f.", c_Bb)
 
+# Test the type-parameterized @promise.
+c_B.stringify_from(0x0f)
+c_Ba.stringify_from(0x0f)
+c_Bb.stringify_from(0x0f)
+@bp_check(c_B.str == string(0x0f))
+@bp_check(c_Ba.str == string(0x0f))
+@bp_check(c_Bb.str == string(Float64(0x0f) / typemax(0x0f)))
+
 # Test DESTRUCT().
 remove_entity(world, en)
 @bp_check(c_B.str == "parent", c_B)
@@ -143,10 +155,10 @@ remove_entity(world, en)
 # Add the entity back for future tests.
 en = add_entity(world)
 
+println("#TODO: Test a child type happening to use the same type param name as its parent type, for a different purpose")
+println("#TODO: Try having a child type override a @configurable/@promise with a more limited set of argument types, and check the parent version can still be called with other types")
 
 # Define "C" components to test a generic parent type.
-println("#TODO: Test a @promise that has its own type params")
-println("#TODO: Test a child type happening to use the same type param name as its parent type, for a different purpose")
 @component C{I<:Integer} {abstract} begin
     i::I
     DEFAULT() = Ca() #TODO: Try adding parameters to DEFAULT

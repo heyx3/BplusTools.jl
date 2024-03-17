@@ -30,9 +30,9 @@ component_macro_promised_return_type(::Type{<:AbstractComponent}, # The concrete
                                      args...
                                      ; kw_args...
                                     )::Optional{Type} = error()
-component_macro_promise_execute(T::Type{<:AbstractComponent}, ::AbstractComponent, v::Val,
+component_macro_promise_execute(T, component, name_val,
                                 args...; kw_args...) = error(
-    "No parent implementation exists for @promise ", val_type(v), "(...)"
+    "No parent implementation exists for @promise ", val_type(name_val), "(...)"
 )
 #    Configurables:
 component_macro_all_configurables(::Type{<:AbstractComponent}) = () # Symbols
@@ -44,9 +44,9 @@ component_macro_configurable_return_type(::Type{<:AbstractComponent}, # The conc
                                          args...
                                          ; kw_args...
                                         )::Optional{Type} = error()
-component_macro_configurable_execute(::Type{<:AbstractComponent},::AbstractComponent, v::Val,
-                                     args::Tuple; kw_args...) = error(
-    "No parent implementation exists for @configurable ", val_type(v), "(...)"
+component_macro_configurable_execute(T, component, name_val,
+                                     args...; kw_args...) = error(
+    "No parent implementation exists for @configurable ", val_type(name_val), "(...)"
 )
 #    Utilities:
 component_field_print(component, field_name::Val, field_value                   , io) = print(io, field_value)
@@ -146,6 +146,8 @@ Here is a detailed example of an abstract component:
     # When overriding this, you can invoke SUPER() to get the implementation of your parent.
     # If `SUPER()` is called with no arguments,
     #    then the arguments given to the child implementation are automatically forwarded.
+    # If the child implementation's parameters have more explicit types,
+    #    then this base implementation can still be called if the child version is not applicable.
     @conigurable should_stop()::Bool = false
 
     # This abstract base type handles the timing for its children.
@@ -900,33 +902,30 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
             end
         end
 
+        # Make sure data is escaped.
+        for a in Iterators.flatten((def.args, def.kw_args, def.where_params))
+            a.is_escaped = true
+        end
+
         # Cache user definitions.
         promise_name = def.name
         name_quote = QuoteNode(promise_name)
         name_str = string(promise_name)
         promise_args::Vector{SplitArg} = SplitArg.(def.args)
         promise_kw_args::Vector{SplitArg} = SplitArg.(def.kw_args)
+        promise_where_params::Vector{SplitType} = SplitType.(def.where_params)
 
         # Wrap the user definitions in our internal macro interface.
         def.name = :( $(@__MODULE__).component_macro_promise_execute )
         if exists(def.return_type)
             def.return_type = esc(def.return_type)
         end
-        for a in def.args
-            a.is_escaped = true
-        end
-        for kw in def.kw_args
-            kw.is_escaped = true
-        end
-        for t in def.where_params
-            t.is_escaped = true
-        end
         insert!(def.args, 1, SplitArg(:( T::Type{<:$(esc(component_with_type_params))} )))
         insert!(def.args, 2, SplitArg(:( $(esc(:this))::$(esc(component_with_type_params)) )))
         insert!(def.args, 3, SplitArg(:( ::Val{$name_quote} )))
         def.where_params = [
-            SplitType.(esc.(type_param_names))...
-            def.where_params...
+            SplitType.(esc.(type_param_names))...,
+            promise_where_params...
         ]
         def.body = esc(def.body)
 
@@ -985,7 +984,9 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         # The return type promised by this child implementation will get checked by Julia on return.
         return_type_call = SplitDef(:(
             $(@__MODULE__).component_macro_promised_return_type($(esc(component_with_type_params)),
-                                                                Val($name_quote))
+                                                                Val($name_quote)
+                                                                # Rest of the arguments are appended below
+                                                                )
         ))
         append!(return_type_call.args,
                 SplitArg(esc(a.name)) for a in promise_args)
@@ -1041,6 +1042,11 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
             end
         end
 
+        # Make sure data is escaped.
+        for a in Iterators.flatten((def.args, def.kw_args, def.where_params))
+            a.is_escaped = true
+        end
+
         # Cache user definitions.
         configurable_name = def.name
         name_quote = QuoteNode(configurable_name)
@@ -1048,10 +1054,6 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         configurable_args::Vector{SplitArg} = SplitArg.(def.args)
         configurable_kw_args::Vector{SplitArg} = SplitArg.(def.kw_args)
         configurable_where_params::Vector{SplitType} = SplitType.(def.where_params)
-
-        # Take all parameters as one big tuple to prevent overload ambiguity.
-        # They will be unpacked in an inner lambda.
-        def.args = [ SplitArg(:( all_args::Tuple )) ]
 
         # Wrap the user definitions in our internal macro interface.
         def.name = :( $(@__MODULE__).component_macro_configurable_execute )
@@ -1061,27 +1063,15 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         insert!(def.args, 1, SplitArg(:( T::Type{<:$(esc(component_with_type_params))} )))
         insert!(def.args, 2, SplitArg(:( $(esc(:this))::$(esc(component_with_type_params)) )))
         insert!(def.args, 3, SplitArg(:( ::Val{$name_quote} )))
-        def.where_params = SplitType.(esc.(type_param_names))
+        def.where_params = [
+            SplitType.(esc.(type_param_names))...,
+            configurable_where_params... 
+        ]
         def.body = esc(def.body)
 
-        # Wrap the body in a lambda to unpack the user's arguments,
-        #    and stop 'return' statements from skipping over our internal logic.
-        def.body = let inner_lambda = SplitDef(:( f() = $(def.body) ))
-            inner_lambda.args = SplitArg.(configurable_args)
-            for a in inner_lambda.args
-                a.is_escaped = true
-            end
-
-            inner_lambda.where_params = SplitType.(configurable_where_params)
-            for w in inner_lambda.where_params
-                w.is_escaped = true
-            end
-
-            quote
-                $(combine_expr(inner_lambda))
-                f(all_args...)
-            end
-        end
+        # Wrap the body in a lambda to stop 'return' statements
+        #    from skipping over our internal logic.
+        def.body = :( (() -> $(def.body))() )
 
         # Provide access to 'entity' and 'world'.
         def.body = quote
@@ -1097,7 +1087,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                 esc(:SUPER), [ ], [ ],
                 :( $(@__MODULE__).component_macro_configurable_execute(
                     $(esc(supertype_concrete_expr)), $(esc(:this)), Val($name_quote),
-                    all_args
+                    $((esc(a.name) for a in configurable_args)...)
                     ; $((if a.is_splat
                              :( $(esc(a.name))... )
                          else
@@ -1119,7 +1109,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                     [ SplitArg(:( kw_args... )) ],
                     :( $(@__MODULE__).component_macro_configurable_execute(
                         $(esc(supertype_concrete_expr)), $(esc(:this)), Val($name_quote),
-                        args; kw_args...
+                        args...; kw_args...
                     ) ),
                     nothing, [ ],
                     nothing, false, false, false
@@ -1136,8 +1126,11 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         return_type_call = SplitDef(:(
             $(@__MODULE__).component_macro_configurable_return_type($(esc(component_with_type_params)),
                                                                     Val($name_quote),
-                                                                    all_args...)
+                                                                    # Rest of the arguments are appended below
+                                                                    )
         ))
+        append!(return_type_call.args,
+                SplitArg(esc(a.name)) for a in configurable_args)
         append!(return_type_call.kw_args,
                 SplitArg(if a.is_splat
                              :( $(esc(a.name))... )
@@ -1202,7 +1195,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                     @inline (args...; kw_args...) -> begin
                         $(@__MODULE__).component_macro_configurable_execute(
                             typeof(c), c, Val($quoted),
-                            args; kw_args...
+                            args...; kw_args...
                         )
                     end
             )

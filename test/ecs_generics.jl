@@ -155,9 +155,6 @@ remove_entity(world, en)
 # Add the entity back for future tests.
 en = add_entity(world)
 
-println("#TODO: Test a child type happening to use the same type param name as its parent type, for a different purpose")
-println("#TODO: Try having a child type override a @configurable/@promise with a more limited set of argument types, and check the parent version can still be called with other types")
-
 # Define "C" components to test a generic parent type.
 @component C{I<:Integer} {abstract} begin
     i::I
@@ -190,5 +187,3 @@ c_Cb.con(5)
 @bp_check(c_C.i === Int16(-13), c_C)
 @bp_check(c_Ca.i === Int16(260), c_Ca)
 @bp_check(c_Cb.i === UInt32(0x3456) - UInt32(5), c_Cb)
-
-#TODO: Test generic requirements, like {require: C{I}}

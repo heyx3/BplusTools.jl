@@ -138,6 +138,9 @@ Here is a detailed example of an abstract component:
     #    and invoke `SUPER()` to get the original parent implementation.
     # If `SUPER()` is called with no arguments,
     #    then the arguments given to the child implementation are automatically forwarded.
+    # If a child implements this, then a grand-child implements it with different parameter types,
+    #    the child and grand-child can both participate in overload resolution,
+    #    meaning children can extend or specialize parent promises.
     @promise finish_maneuver(last_time_step::F)
 
     # Child components may choose to override this.
@@ -146,8 +149,9 @@ Here is a detailed example of an abstract component:
     # When overriding this, you can invoke SUPER() to get the implementation of your parent.
     # If `SUPER()` is called with no arguments,
     #    then the arguments given to the child implementation are automatically forwarded.
-    # If the child implementation's parameters have more explicit types,
-    #    then this base implementation can still be called if the child version is not applicable.
+    # If a child implements this with different parameter types,
+    #    the parent and child component can both participate in overload resolution,
+    #    meaning children can extend or specialize a parent's configurables.
     @conigurable should_stop()::Bool = false
 
     # This abstract base type handles the timing for its children.

@@ -1,4 +1,4 @@
-# Test type parameters and their interaction with other features.
+# BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
 
 world = World()
 en = add_entity(world)
@@ -8,8 +8,12 @@ en = add_entity(world)
     i::Int
     @configurable modify_i() = (this.i *= 5)
     @configurable modify_i_2(j) = (this.i -= j)
+    @configurable set_from_type(::Type{J}) where {J<:Integer} = begin
+        this.i = typemin(J)
+    end
 end
 @component Aa <: A begin
+    set_from_type(::Type{J}) where {J<:Integer} = (this.i = typemax(J))
 end
 @component Ab{j} <: A begin
     floats::NTuple{j, Float32}
@@ -20,6 +24,7 @@ end
         this.i = typemax(I)
         return convert(I, this.i)
     end
+    set_from_type(::Type{J}) where {J<:Integer} = (this.i = typemax(J) ÷ J(2))
 end
 @component Ad{b} <: A begin
     modify_i() = (b && SUPER())
@@ -63,6 +68,16 @@ c_Ad_no.modify_i_2(7)
 @bp_check(c_Ac.i == (typemax(UInt8)-5), c_Ac)
 @bp_check(c_Ad_yes.i == (12*5)-6, c_Ad_yes)
 @bp_check(c_Ad_no.i == (15)-10, c_Ad_no)
+c_Aa.set_from_type(UInt16)
+c_Ab.set_from_type(UInt16)
+c_Ac.set_from_type(UInt16)
+c_Ad_yes.set_from_type(UInt16)
+c_Ad_no.set_from_type(UInt16)
+@bp_check(c_Aa.i == typemax(UInt16), c_Aa)
+@bp_check(c_Ab.i == typemin(UInt16), c_Ab)
+@bp_check(c_Ac.i == typemax(UInt16) ÷ 2, c_Ac)
+@bp_check(c_Ad_yes.i == typemin(UInt16), c_Ad_yes)
+@bp_check(c_Ad_no.i == typemin(UInt16), c_Ad_no)
 
 # Define "B" components to test promises, and builtin functions.
 @component B {abstract} begin
@@ -72,6 +87,8 @@ c_Ad_no.modify_i_2(7)
 
     "Sets the `str` field to a description of this component"
     @promise stringify_self()::Nothing
+    "Sets the `str` field based on the given integer"
+    @promise stringify_from(i::Integer)::Nothing
 
     TICK() = (this.str *= ".")
     DESTRUCT() = (this.str = "parent")
@@ -79,6 +96,7 @@ end
 @component Ba{T} <: B begin
     t::T
     stringify_self() = (this.str = string(this.t))
+    stringify_from(i) = (this.str = string(i))
     TICK() = (this.str *= string(T))
 end
 @component Bb{T} <: B begin
@@ -87,11 +105,12 @@ end
         SUPER(i)
         (this.t = convert(T, t))
     end
-    stringify_self() = (this.str = "b$T")
     DESTRUCT() = begin
-        this.str = string(T) # Overridden by parent shutdown
+        this.str = string(T) # Should get overridden by parent shutdown
         this.t = zero(T)
     end
+    stringify_self() = (this.str = "b$T")
+    stringify_from(i::I) where {I <: Integer} = (this.str = string(Float64(i) / typemax(I)))
 end
 c_B = add_component(en, B)
 c_Ba = add_component(en, Ba{UInt8}, 5, "uint8")
@@ -119,12 +138,52 @@ tick_world(world, 0.1f0)
 @bp_check(c_Ba.str == "$(5).$UInt8", c_Ba)
 @bp_check(c_Bb.str == "b$v3f.", c_Bb)
 
+# Test the type-parameterized @promise.
+c_B.stringify_from(0x0f)
+c_Ba.stringify_from(0x0f)
+c_Bb.stringify_from(0x0f)
+@bp_check(c_B.str == string(0x0f))
+@bp_check(c_Ba.str == string(0x0f))
+@bp_check(c_Bb.str == string(Float64(0x0f) / typemax(0x0f)))
+
 # Test DESTRUCT().
 remove_entity(world, en)
 @bp_check(c_B.str == "parent", c_B)
 @bp_check(c_Ba.str == "parent", c_Ba)
 @bp_check(c_Bb.str == "parent", c_Bb)
 @bp_check(c_Bb.t == zero(v3f), c_Bb)
+# Add the entity back for future tests.
+en = add_entity(world)
 
-
-#TODO: C{T} component to test the parent type being generic
+# Define "C" components to test a generic parent type.
+@component C{I<:Integer} {abstract} begin
+    i::I
+    DEFAULT() = Ca() #TODO: Try adding parameters to DEFAULT
+    @configurable con(j)::Nothing = (this.i += convert(I, j))
+    @promise get()::I
+end
+@component Ca <: C{Int16} begin
+    CONSTRUCT(i = -16) = SUPER(Int16(i))
+    get() = -this.i
+end
+@component Cb{J} <: C{J} begin
+    get() = this.i
+    con(j) = (this.i -= j)
+end
+@bp_check_throws(add_component(en, C{Int64}), "Default `C` is a C{Int16}")
+c_C = add_component(en, C{Int16})
+c_Ca = add_component(en, Ca, 256)
+c_Cb = add_component(en, Cb{UInt32}, 0x3456)
+@bp_check(c_C isa Ca, c_C)
+@bp_check(c_C.i === Int16(-16), c_C)
+@bp_check(c_Ca.i === Int16(256), c_Ca)
+@bp_check(c_Cb.i === UInt32(0x3456))
+@bp_check(c_C.get() === Int16(16), c_C.get())
+@bp_check(c_Ca.get() === Int16(-256), c_Ca.get())
+@bp_check(c_Cb.get() === UInt32(0x3456), c_Cb.get())
+c_C.con(3)
+c_Ca.con(4)
+c_Cb.con(5)
+@bp_check(c_C.i === Int16(-13), c_C)
+@bp_check(c_Ca.i === Int16(260), c_Ca)
+@bp_check(c_Cb.i === UInt32(0x3456) - UInt32(5), c_Cb)

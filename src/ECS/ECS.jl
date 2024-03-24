@@ -15,7 +15,7 @@ include("macros.jl")
 export World, Entity, AbstractComponent,
        add_entity, remove_entity,
        add_component, remove_component,
-       has_component, get_component, get_components,
+       has_component, get_component, get_components, count_components,
        tick_world, reset_world,
        @component, get_component_types
 

@@ -119,6 +119,15 @@ push!(c1s, add_component(entities[1], Component1))
             Component1 => 3,
             Component2 => 1
         )
+@bp_check count_components(entities[1], Component1) === 3
+@bp_check count_components(entities[1], Component2) === 1
+@bp_check count_components(entities[1], Component3) === 0
+@bp_check count_components(entities[2], Component1) === 0
+@bp_check count_components(entities[2], Component2) === 0
+@bp_check count_components(entities[2], Component3) === 0
+@bp_check count_components(world, Component1) === 3
+@bp_check count_components(world, Component2) === 1
+@bp_check count_components(world, Component3) === 0
 
 # Remove the second of the three C1's.
 remove_component(entities[1], c1s[2])
@@ -126,6 +135,15 @@ deleteat!(c1s, 2)
 
 @bp_check entities[1].components == [ c2[], c1s... ]
 @bp_check entities[2].components == [ ]
+@bp_check count_components(entities[1], Component1) === 2
+@bp_check count_components(entities[1], Component2) === 1
+@bp_check count_components(entities[1], Component3) === 0
+@bp_check count_components(entities[2], Component1) === 0
+@bp_check count_components(entities[2], Component2) === 0
+@bp_check count_components(entities[2], Component3) === 0
+@bp_check count_components(world, Component1) === 2
+@bp_check count_components(world, Component2) === 1
+@bp_check count_components(world, Component3) === 0
 
 @bp_check world.component_lookup == Dict(
             entities[1] => Dict(

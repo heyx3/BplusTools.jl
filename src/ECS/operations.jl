@@ -86,7 +86,7 @@ function add_component(e::Entity, ::Type{T},
 
     # Check that this operation is valid.
     @bp_ecs_assert(isabstracttype(T) || (isstructtype(T) && ismutabletype(T)),
-                   "Component type should be a mutable struct: ", T)
+                   "Component type should be abstract or a mutable struct: ", T)
     if is_worldsingleton_component(T)
         @bp_check(!has_component(world, T), "World alread has a ", T, " component")
     elseif is_entitysingleton_component(T)
@@ -181,42 +181,108 @@ const EMPTY_ENTITY_COMPONENT_LOOKUP = Dict{Type{<:AbstractComponent}, Set{Abstra
 const EMPTY_COMPONENT_SET = Set{AbstractComponent}()
 const EMPTY_ENTITY_SET = Set{Entity}()
 
-function has_component(e::Entity, T::Type{<:AbstractComponent})::Bool
-    relevant_entities = get(e.world.entity_lookup, T, EMPTY_ENTITY_SET)
-    return e in relevant_entities
+function has_component(e::Entity, ::Type{T})::Bool where {T<:AbstractComponent}
+    # If T is not concrete, we need to search for all matching types.
+    if T isa UnionAll
+        return any((T2<:T) && (e in entities) for (T2, entities) in e.world.entity_lookup)
+    else
+        relevant_entities = get(e.world.entity_lookup, T, EMPTY_ENTITY_SET)
+        return e in relevant_entities
+    end
 end
-function has_component(w::World, T::Type{<:AbstractComponent})::Bool
-    return haskey(w.component_counts, T)
+function has_component(w::World, ::Type{T})::Bool where {T<:AbstractComponent}
+    # If T is not concrete, we need to search for all matching types.
+    if T isa UnionAll
+        return any(T2<:T for T2 in keys(w.component_counts))
+    else
+        return haskey(w.component_counts, T)
+    end
 end
 
-"Throws an error if there is more than one of the given type of component for the given entity"
+"In Debug mode, throws an error if there is more than one of the given type of component for the given entity"
 function get_component(e::Entity, ::Type{T})::Optional{T} where {T<:AbstractComponent}
-    lookup = e.world.component_lookup[e]
-    if haskey(lookup, T)
-        components = lookup[T]
-        if isempty(components)
-            return nothing
-        elseif length(components) > 1
-            error("More than one ", T, " on entity")
-        else
-            return first(components)
+    # To catch the error of more than 1 component,
+    #    iterate through all components and throw an error on the second iteration.
+    if @bp_ecs_debug
+        output::Optional{T} = nothing
+        for c in get_components(e, T)
+            @bp_check(isnothing(output) || c == output,
+                      "More than one ", T, " on entity")
+            output = c
         end
+        return output
     else
+        for c in get_components(e, T)
+            return c
+        end
         return nothing
     end
 end
-"Gets an iterator of all instances of the given component attached to the given entity"
-@inline function get_components(e::Entity, ::Type{T}) where {T<:AbstractComponent}
+"
+Gets an iterator of all instances of the given component attached to the given entity.
+
+Note that for UnionAll types the operation is a bit slower and requires a data structure;
+    you pass in a buffer to avoid heap allocations in this case.
+"
+@inline function get_components(e::Entity, ::Type{T};
+                                # If T is a UnionAll (not all type params are known),
+                                #    then some heap allocations are required
+                                #    to avoid double-counting components.
+                                # This lets you re-use allocations.
+                                buffer_unionall_components::Optional{Set{AbstractComponent}} = nothing
+                               ) where {T<:AbstractComponent}
     @bp_ecs_assert(isempty(EMPTY_ENTITY_COMPONENT_LOOKUP), "Somebody modified 'EMPTY_ENTITY_COMPONENT_LOOKUP'")
-    per_component_lookup = get(e.world.component_lookup, e,
-                               EMPTY_ENTITY_COMPONENT_LOOKUP)
-    return (c::T for c in get(per_component_lookup, T, EMPTY_COMPONENT_SET)::Set{AbstractComponent})
+    per_component_lookup = get(e.world.component_lookup, e, EMPTY_ENTITY_COMPONENT_LOOKUP)
+
+    # If T is not concrete, we need to look for all subtypes.
+    if T isa UnionAll
+        if isnothing(buffer_unionall_components)
+            buffer_unionall_components = Set{AbstractComponent}()
+        else
+            empty!(buffer_unionall_components)
+        end
+        append!(buffer_unionall_components, (
+            Iterators.flatten(components for (type, components) in per_component_lookup if type<:T)
+        ))
+        return (c::T for c in buffer_unionall_components) # Tell the compiler what we already know
+    else
+        @bp_ecs_assert(isempty(EMPTY_COMPONENT_SET), "Somebody modified 'EMPTY_COMPONENT_SET'")
+        components::Set{AbstractComponent} = get(per_component_lookup, T, EMPTY_COMPONENT_SET)
+        return (c::T for c in components)  # Tell the compiler what we already know
+    end
 end
-function count_components(e::Entity, ::Type{T}) where {T<:AbstractComponent}
+"
+Counts the number of instances of the given component in the given entity.
+
+Note that for UnionAll types the operation is a bit slower and requires a data structure;
+    you pass in a buffer to avoid heap allocations in this case.
+"
+function count_components(e::Entity, ::Type{T};
+                          # If T is a UnionAll (not all type params are known),
+                          #    then some heap allocations are required
+                          #    to avoid double-counting components.
+                          # This lets you re-use allocations.
+                          buffer_unionall_components::Optional{Set{AbstractComponent}} = nothing
+                         ) where {T<:AbstractComponent}
     @bp_ecs_assert(isempty(EMPTY_ENTITY_COMPONENT_LOOKUP), "Somebody modified 'EMPTY_ENTITY_COMPONENT_LOOKUP'")
-    per_component_lookup = get(e.world.component_lookup, e,
-                               EMPTY_ENTITY_COMPONENT_LOOKUP)
-    return length(get(per_component_lookup, T, EMPTY_COMPONENT_SET)::Set{AbstractComponent})
+    per_component_lookup = get(e.world.component_lookup, e, EMPTY_ENTITY_COMPONENT_LOOKUP)
+
+    # If T is not concrete, we need to look for all subtypes.
+    if T isa UnionAll
+        if isnothing(buffer_unionall_components)
+            buffer_unionall_components = Set{AbstractComponent}()
+        else
+            empty!(buffer_unionall_components)
+        end
+        append!(buffer_unionall_components, (
+            Iterators.flatten(components for (type, components) in per_component_lookup if type<:T)
+        ))
+        return length(buffer_unionall_components)
+    else
+        @bp_ecs_assert(isempty(EMPTY_COMPONENT_SET), "Somebody modified 'EMPTY_COMPONENT_SET'")
+        components::Set{AbstractComponent} = get(per_component_lookup, T, EMPTY_COMPONENT_SET)
+        return length(components)
+    end
 end
 
 "
@@ -224,36 +290,91 @@ Gets a singleton component, assumed to be the only one of its kind.
 Returns its owning entity as well.
 "
 function get_component(w::World, ::Type{T})::Optional{Tuple{T, Entity}} where {T<:AbstractComponent}
-    all_instances = get_components(w, T)
-
-    # Get the first instance.
-    iter_first = iterate(all_instances)
-    if isnothing(iter_first)
-        return nothing
+    if @bp_ecs_debug
+        # To catch the error of more than 1 component,
+        #    iterate through all components and throw an error on the second iteration.
+        output::Optional{Tuple{T, Entity}} = nothing
+        for (c::T, e::Entity) in get_components(w, T)
+            @bp_check(isnothing(output), "More than one ", T, " in world")
+            output = (c, e)
+        end
+        return output
+    else
+        # Non-concrete T's require some heap allocation to iterate components,
+        #    but we can skip that for finding a single component with no error-checking.
+        if T isa UnionAll
+            for (T2, entities) in w.entity_lookup
+                if T2<:T
+                    for e::Entity in entities
+                        for c::T in w.component_lookup[e][T2]
+                            return (c, e)
+                        end
+                    end
+                end
+            end
+            return nothing
+        else
+            for (c::T, e::Entity) in get_components(w, T)
+                return (c, e)
+            end
+            return nothing
+        end
     end
-
-    # Double-check that there's no second one.
-    (result, iter_state) = iter_first
-    iter_second = iterate(all_instances, iter_state)
-    @bp_check(isnothing(iter_second), "Found more than one ", T)
-
-    @bp_ecs_assert(result isa Tuple{T, Entity}, "Lookup provided us with a ",
-                       typeof(result), " instead of a Tuple{", T, ", Entity}")
-    return result::Tuple{T, Entity}
 end
 "
 Gets an iterator of all instances of the given component in the entire world.
 Each element is a `Tuple{T, Entity}`.
-"
-@inline function get_components(w::World, ::Type{T}) where {T<:AbstractComponent}
-    @bp_ecs_assert(isempty(EMPTY_ENTITY_SET), "Somebody modified 'EMPTY_ENTITY_SET'")
 
-    relevant_entities = get(w.entity_lookup, T, EMPTY_ENTITY_SET)
-    relevant_type_lookups = ((e, w.component_lookup[e]) for e in relevant_entities)
-    instances_per_entity = ((e, get(lookup, T, EMPTY_COMPONENT_SET)) for (e, lookup) in relevant_type_lookups)
-    all_instances = Iterators.flatten(zip(instances, Iterators.repeated(e)) for (e, instances) in instances_per_entity)
-    return ((c::T, e) for (c, e) in all_instances)
+Note that for UnionAll types the operation is a bit slower and requires a data structure;
+    you pass in a buffer to avoid heap allocations in this case.
+"
+@inline function get_components(w::World, ::Type{T};
+                                # If T is a UnionAll (not all type params are known),
+                                #    then some heap allocations are required
+                                #    to avoid double-counting components.
+                                # This lets you re-use allocations.
+                                buffer_unionall_components::Optional{Set{Tuple{T, Entity}}} = nothing
+                               ) where {T<:AbstractComponent}
+    # If T is not concrete, we need to search for all matching types.
+    if T isa UnionAll
+        if isnothing(buffer_unionall_components)
+            buffer_unionall_components = Set{Tuple{T, Entity}}()
+        else
+            empty!(buffer_unionall_components)
+        end
+        append!(buffer_unionall_components, (
+            (c, e) for (T2, entities) in w.entity_lookup if T2<:T
+                     for e::Entity in entities
+                      for c::T in w.component_lookup[e][T2]
+        ))
+        return buffer_unionall_components
+    else
+        @bp_ecs_assert(isempty(EMPTY_ENTITY_SET), "Somebody modified 'EMPTY_ENTITY_SET'")
+        relevant_entities = get(w.entity_lookup, T, EMPTY_ENTITY_SET)
+        relevant_type_lookups = ((e, w.component_lookup[e]) for e in relevant_entities)
+        instances_per_entity = ((e, get(lookup, T, EMPTY_COMPONENT_SET)) for (e, lookup) in relevant_type_lookups)
+        all_instances = Iterators.flatten(zip(instances, Iterators.repeated(e)) for (e, instances) in instances_per_entity)
+        return ((c::T, e) for (c, e) in all_instances)
+    end
 end
-function count_components(w::World, ::Type{T}) where {T<:AbstractComponent}
-    return get(w.component_counts, T, 0)
+"
+Counts all components in the world of the given type.
+
+For UnionAll types, the operation is a bit slower and requires a data structure;
+    you pass in a buffer to avoid heap allocations in this case.
+"
+function count_components(w::World, ::Type{T};
+                          # If T is a UnionAll (not all type params are known),
+                          #    then some heap allocations are required
+                          #    to avoid double-counting components.
+                          # This lets you re-use allocations.
+                          buffer_unionall_components::Optional{Set{Tuple{T, Entity}}} = nothing
+                         )::Int where {T<:AbstractComponent}
+    # If T is not concrete, we need to search for all matching types.
+    if T isa UnionAll
+        return count(i->true,
+                     get_components(w, T; buffer_unionall_components=buffer_unionall_components))
+    else
+        return get(w.component_counts, T, 0)
+    end
 end

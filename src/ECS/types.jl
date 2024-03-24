@@ -6,7 +6,7 @@ abstract type AbstractComponent end
 "
 An organized collection of components.
 
-The `World` type is defined afterwards, so it's hidden through a type parameter here.
+The `World` type is defined afterwards, so it's hidden through a type parameter.
 You should refer to this type using the alias `Entity`.
 "
 mutable struct _Entity{TWorld}
@@ -25,7 +25,7 @@ mutable struct World
     # For each Entity, for each Component type, lists all instances.
     component_lookup::Dict{_Entity{World},
                            Dict{Type{<:AbstractComponent},
-                                Set{AbstractComponent}}}
+                                Set{AbstractComponent}}} #TODO: Vector{AbstractComponent} would probably have better performance, and this is only used internally
     # For each component type, lists all entities with that component.
     entity_lookup::Dict{Type{<:AbstractComponent},
                         Set{_Entity{World}}}

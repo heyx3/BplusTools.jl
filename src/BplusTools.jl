@@ -3,7 +3,7 @@ module BplusTools
 
 # Import dependencies.
 using Setfield, Dates
-using GLFW, DataStructures
+using DataStructures
 
 # Import B+.
 using BplusCore

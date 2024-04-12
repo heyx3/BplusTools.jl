@@ -14,7 +14,7 @@ function reset_world(w::World)
     while !isempty(w.entities)
         remove_entity(w.entities[end])
     end
-    
+
     w.elapsed_seconds = 0
     w.time_scale = 1
 end

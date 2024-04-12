@@ -268,6 +268,8 @@ en = add_entity(world)
 # Define "C" components to test a generic parent type.
 @component C{I<:Integer} {abstract} begin
     i::I
+    # If passed nothing, initialize 'i' with some code that uses 'I' as a type parameter.
+    CONSTRUCT(i=nothing) = (this.i = exists(i) ? i : first(keys(Dict{I, Symbol}(typemin(I)=>:blah))))
     DEFAULT() = Ca() #TODO: Try adding parameters to DEFAULT
     @configurable con(j)::Nothing = (this.i += convert(I, j))
     @promise get()::I
@@ -277,8 +279,13 @@ end
     get() = -this.i
 end
 @component Cb{J} <: C{J} begin
+    CONSTRUCT(i) = SUPER(i)
     get() = this.i
     con(j) = (this.i -= j)
+end
+@component Cc <: C{Int8} begin
+    CONSTRUCT() = SUPER()
+    get() = this.i
 end
 @bp_check_throws(add_component(en, C{Int64}), "Default `C` is a C{Int16}")
 c_C = add_component(en, C{Int16})
@@ -337,3 +344,6 @@ c_Cb.con(5)
 @bp_check(count_components(world, C{UInt32} ) === 1)
 @bp_check(count_components(world, C{Int8}   ) === 0)
 @bp_check(count_components(world, C         ) === 3)
+# Check a specific error-case that I've found:
+c_Cc = add_component(en, Cc)
+@bp_check(c_Cc.i == typemin(Int8), c_Cc)

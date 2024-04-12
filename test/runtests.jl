@@ -16,7 +16,8 @@ BplusTools.bp_helpers_asserts_enabled() = true
 
 # Execute the tests.
 const TEST_HEADER_EXTRA = quote
-    using JSON3, DataStructures
+    using Setfield, Random
+    using StructTypes, JSON3, DataStructures
 
     # Sadly, the macros to auto-import B+ do not work right in here.
     using BplusCore, BplusApp, BplusTools

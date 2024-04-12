@@ -1,14 +1,28 @@
-"A simple 3D camera, useful for 3D scene viewers."
+"A traditional 3D perspective where lines converge to a point as they move away from the camera"
+Base.@kwdef struct PerspectiveProjection{F<:AbstractFloat}
+    clip_range::Interval{F} = Interval(min=convert(F, 0.01),
+                                       max=convert(F, 1000))
+    vertical_fov_degrees::F = convert(F, 90)
+    aspect_width_over_height::F = one(F)
+end
+
+"
+A flat perspective where parallel lines appear parallel on the screen.
+Useful for shadowmaps, 2D views, and isometric views.
+Specified as the range of values visible in camera view space;
+  usually XY is centered around {0, 0} and Z goes from 0 to some world distance like 1000.
+"
+const OrthographicProjection{F} = Box3D{F}
+
+
+"A simple 3D camera representation"
 Base.@kwdef struct Cam3D{F<:AbstractFloat}
     pos::Vec3{F} = zero(Vec3{F})
 
     forward::Vec3{F} = get_horz_vector(2, F)
     up::Vec3{F} = get_up_vector(F)
 
-    clip_range::Interval{F} = Interval(min=convert(F, 0.01),
-                                       max=convert(F, 1000))
-    fov_degrees::F = convert(F, 90)
-    aspect_width_over_height::F = one(F)
+    projection::Union{PerspectiveProjection{F}, OrthographicProjection{F}} = PerspectiveProjection{F}()
 end
 
 "Gets the vector for this camera's right-ward direction."
@@ -17,18 +31,23 @@ cam_rightward(cam::Cam3D{F}) where {F} = cam_basis(cam).right
 @inline cam_basis(cam::Cam3D)::VBasis = vbasis(cam.forward, cam.up)
 
 "Computes the view matrix for the given camera."
-function cam_view_mat(cam::Cam3D{F})::Mat{4, 4, F} where {F}
+function cam_view_mat(cam::Cam3D{F})::Mat{4, 4, F, 16} where {F}
     return m4_look_at(cam.pos, cam.pos + cam.forward, cam.up)
 end
+
 "Computes the projection matrix for the given camera."
 function cam_projection_mat(cam::Cam3D{F})::Mat{4, 4, F} where {F}
-    return m4_projection(
-        min_inclusive(cam.clip_range), max_exclusive(cam.clip_range),
-        cam.aspect_width_over_height,
-        cam.fov_degrees)
+    return cam_projection_mat(cam.projection)
 end
+cam_projection_mat(p::OrthographicProjection{F}) where {F} = m4_ortho(p)
+cam_projection_mat(p::PerspectiveProjection{F}) where {F} = m4_projection(
+    min_inclusive(p.clip_range), max_exclusive(p.clip_range),
+    p.aspect_width_over_height,
+    p.vertical_fov_degrees
+)
 
-export Cam3D, cam_rightward, cam_basis, cam_view_mat, cam_projection_mat
+export PerspectiveProjection, OrthoProjection, Cam3D,
+       cam_rightward, cam_basis, cam_view_mat, cam_projection_mat
 
 
 #######################

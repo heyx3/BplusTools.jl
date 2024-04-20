@@ -1,8 +1,12 @@
 # An internal interface is used to reference inherited behavior/data from parent components.
 #    Metadata:
-component_macro_field_exprs(T::Type{<:AbstractComponent}, # *Without* its type params
-                            type_params_exprs...
-                           ) = error() # iteration of Pair{name Symbol, type expr}
+component_macro_field_names(T::Type{<:AbstractComponent} #= *without* type params =#) = error()
+component_macro_type_data(T::Type{<:AbstractComponent} # *without* type params
+                          ) = # Returns a tuple of (field_types, original_type_param_names)
+    error(
+        "Component ", T, " doesn't have a field '", val_type(Name), "', or the input type params were incorrect: ",
+        "(", join(type_param_exprs, ", "), ")"
+    )
 component_macro_has_custom_constructor(::Type{<:AbstractComponent})::Bool = error()
 component_macro_types_to_oldest_exprs(::Type{<:AbstractComponent}) = () # Takes a UnionAll type plus its type param expressions.
                                                                         # Returns the type and its parent types, youngest to oldest,
@@ -317,13 +321,18 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         end
     end
 
-    # Process the supertype (e.x inheriting attributes).
+    # Inherit things from the parent type.
     supertype_concrete_expr = if isnothing(supertype_t)
         AbstractComponent
     elseif isempty(supertype_params)
         supertype_t
     else
         :( $supertype_t{$(supertype_params...)} )
+    end
+    (inherited_field_type_exprs, parent_type_param_names) = if exists(supertype_t)
+        component_macro_type_data(supertype_t)
+    else
+        ((), ())
     end
     if exists(supertype_t)
         if is_entitysingleton_component(supertype_t)
@@ -364,7 +373,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
     ]
     all_supertypes_oldest_first_exprs = reverse(all_supertypes_youngest_first_exprs)
 
-    field_data = Vector{Pair{Symbol, Any}}()
+    all_fields = Vector{Pair{Symbol, Any}}()
 
     # Parse the declarations.
     constructor::Optional{SplitDef} = nothing
@@ -466,7 +475,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
             if fieldName in (:entity, :world)
                 error("Can't name a component field 'entity', or 'world'")
             end
-            push!(field_data, fieldName => (isnothing(fieldType) ? Any : fieldType))
+            push!(all_fields, fieldName => (isnothing(fieldType) ? Any : fieldType))
         elseif is_macro_invocation(statement)
             macro_data = SplitMacro(statement)
             if macro_data.name == Symbol("@promise")
@@ -522,9 +531,24 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         end
     end
 
-    # Take fields from the parent, after the new ones.
+    # Take fields from the parent.
+    new_child_fields = copy(all_fields)
     if supertype_t != AbstractComponent
-        append!(field_data, component_macro_field_exprs(supertype_t, supertype_params...))
+        for (inherited_field_name, inherited_field_type_expr) in zip(component_macro_field_names(supertype_t),
+                                                                     inherited_field_type_exprs)
+            # Replace the parent's type params with the ones this child specified.
+            # Unfortunately there's not a more elegant way to do this
+            #    as struct field types cannot be an arbitrary Julia expression;
+            #    they have to be quite literal.
+            push!(all_fields, inherited_field_name => MacroTools.postwalk(inherited_field_type_expr) do e
+                t_idx = findfirst(n -> n == e, parent_type_param_names)
+                if exists(t_idx)
+                    return supertype_params[t_idx]
+                else
+                    return e
+                end
+            end)
+        end
     end
 
     # Post-process the statement data.
@@ -557,7 +581,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
 
     # Look for duplicate property names: fields, promises, and configurables.
     property_name_counts = Dict{Symbol, Int}()
-    for name in Iterators.flatten(((name for (name, _) in field_data),
+    for name in Iterators.flatten(((name for (name, _) in all_fields),
                                    all_configurable_names,
                                    all_promise_names))
         if !haskey(property_name_counts, name)
@@ -579,7 +603,20 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                 entity::Entity
                 world::World
 
-                $(( esc(:( $f::$t )) for (f, t) in field_data )...)
+                # The manual interpolation of inherited type parameters
+                #    will inevitably leave 'esc()' terms inside the type expression.
+                # However, Julia doesn't allow nested escapes,
+                #    so we must prune them out.
+                $((map(all_fields) do (f,t)
+                    t = MacroTools.postwalk(t) do t_e
+                        return if MacroTools.isexpr(t_e, :escape)
+                            t_e.args[1]
+                        else
+                            t_e
+                        end
+                    end
+                    return esc(:( $f::$t))
+                end)...)
 
                 # Constructor needs to include type params only if applicable.
                 $(begin
@@ -645,7 +682,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         else
             error("Unhandled: ", typing_mode)
         end
-        component_t = if broaden_component_type
+        component_t_expr = if broaden_component_type
             :( Type{<:$component_t} )
         else
             :( Type{$component_t} )
@@ -682,7 +719,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
 
         # Assemble the function AST.
         func_def = SplitDef(:(
-            $(@__MODULE__).$func_name(::$component_t,
+            $(@__MODULE__).$func_name(::$component_t_expr,
                                       $(combinearg.(SplitArg.(args))...)
                                       ;
                                       $(combinearg.(SplitArg.(extra_kw_args))...)
@@ -708,12 +745,16 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         end
         return final_emission
     end
-    emit_macro_interface_impl(:component_macro_field_exprs,
-        :( tuple(
-            $((:( $(QuoteNode(a)) => $(esc(b)) )
-                for (a,b) in field_data)...)
-        ) ),
-        typing_mode = @ano_value(runtime_type_param_exprs)
+    emit_macro_interface_impl(:component_macro_field_names,
+        Tuple(n for (n, t) in all_fields),
+        typing_mode = @ano_value(no_type_params)
+    )
+    emit_macro_interface_impl(:component_macro_type_data,
+        tuple(
+            Tuple(t for (n,t) in all_fields),
+            type_param_names
+        ),
+        typing_mode = @ano_value(no_type_params)
     )
     emit_macro_interface_impl(:component_macro_has_custom_constructor,
         exists(constructor),
@@ -752,7 +793,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         #    the body should set each field to its corresponding argument.
         if isnothing(constructor)
             quote
-                $(map(field_data) do (name, type)
+                $(map(all_fields) do (name, type)
                     return esc(:( this.$name = convert($type, $name) ))
                 end...)
 
@@ -798,7 +839,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
 
             # If using an auto-generated constructor, add one arg for each field.
             (if isnothing(constructor)
-                (esc(name) for (name, type) in field_data)
+                (esc(name) for (name, type) in all_fields)
             # If using an explicit constructor, take parameters from the constructor definition.
             # Escape each argument's entire declaration.
             else
@@ -1163,7 +1204,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
     push!(global_decls, quote
         @inline $Base.propertynames(::$(esc(component_without_type_params))) = tuple(
             :world, :entity,
-            $((QuoteNode(n) for (n, T) in field_data)...),
+            $((QuoteNode(n) for (n, T) in all_fields)...),
             $((QuoteNode(p) for p in all_promise_names)...),
             $((QuoteNode(c) for c in all_configurable_names)...)
         )
@@ -1172,7 +1213,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         @inline $Base.getproperty(c::$(esc(component_without_type_params)), ::Val{:entity}) = getfield(c, :entity)
         @inline $Base.getproperty(c::$(esc(component_without_type_params)), ::Val{:world}) = getfield(c, :world)
 
-        $(map(field_data) do (name, type); :(
+        $(map(all_fields) do (name, type); :(
             @inline $Base.getproperty(c::$(esc(component_without_type_params)),
                                       ::Val{$(QuoteNode(name))}
                                      ) =
@@ -1285,7 +1326,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
     if !is_abstract; push!(global_decls, :(
         function $Base.show(io::IO, c::$(esc(component_without_type_params)))
             print(io, typeof(c), "(<entity>, <world>")
-            $(map(field_data) do (name, declared_type); quote
+            $(map(all_fields) do (name, declared_type); quote
                 print(io, ", ")
                 $(@__MODULE__).component_field_print(
                     c,

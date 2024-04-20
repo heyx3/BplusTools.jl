@@ -1,3 +1,5 @@
+BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
+
 # Component1 is not a singleton, and requires a Component2.
 @component Component1 {require: Component2} begin
     i::Int
@@ -122,12 +124,15 @@ push!(c1s, add_component(entities[1], Component1))
 @bp_check count_components(entities[1], Component1) === 3
 @bp_check count_components(entities[1], Component2) === 1
 @bp_check count_components(entities[1], Component3) === 0
+@bp_check count_components(entities[1], AbstractComponent) == 4
 @bp_check count_components(entities[2], Component1) === 0
 @bp_check count_components(entities[2], Component2) === 0
 @bp_check count_components(entities[2], Component3) === 0
+@bp_check count_components(entities[2], AbstractComponent) == 0
 @bp_check count_components(world, Component1) === 3
 @bp_check count_components(world, Component2) === 1
 @bp_check count_components(world, Component3) === 0
+@bp_check count_components(world, AbstractComponent) == 4
 
 # Remove the second of the three C1's.
 remove_component(entities[1], c1s[2])
@@ -138,12 +143,15 @@ deleteat!(c1s, 2)
 @bp_check count_components(entities[1], Component1) === 2
 @bp_check count_components(entities[1], Component2) === 1
 @bp_check count_components(entities[1], Component3) === 0
+@bp_check count_components(entities[1], AbstractComponent) == 3
 @bp_check count_components(entities[2], Component1) === 0
 @bp_check count_components(entities[2], Component2) === 0
 @bp_check count_components(entities[2], Component3) === 0
+@bp_check count_components(entities[2], AbstractComponent) == 0
 @bp_check count_components(world, Component1) === 2
 @bp_check count_components(world, Component2) === 1
 @bp_check count_components(world, Component3) === 0
+@bp_check count_components(world, AbstractComponent) == 3
 
 @bp_check world.component_lookup == Dict(
             entities[1] => Dict(
@@ -318,3 +326,8 @@ remove_component(entities[1], c5s[end])
 @bp_check(c5s[end].is_dead)
 @bp_check(!c6s[end].is_dead)
 deleteat!(c5s, length(c5s))
+
+
+if exists(BplusTools.ECS.PRINT_COMPONENT_CODE)
+    close(BplusTools.ECS.PRINT_COMPONENT_CODE)
+end

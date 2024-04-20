@@ -3,6 +3,7 @@
 * Removed unused project dependencies
 * **breaking** Clarified that Cam3D's field-of-view field is vertical
 * **breaking** Brought back Cam3D changes that were accidentally lost when refactoring B+ into the three sub-packages
+* Fixed bug with ECS components when inheriting from a parent with type params, that uses those type params in fields
 
 # v0.1.1
 

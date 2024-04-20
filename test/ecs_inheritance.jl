@@ -1,4 +1,4 @@
-# BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
+BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
 
 # Simulate an entity maneuvering in different ways.
 # Note that this example comes from @component's doc-string.
@@ -47,7 +47,6 @@ end
 A Maneuver that moves the entity in a specific direction at a constant speed.
 Only one maneuver can run at a time.
 "
-const DUMMY = 4
 @component StrafingManeuver <: Maneuver {require: MaxSpeed} begin
     speed_component::MaxSpeed
     dir::v3f
@@ -103,10 +102,16 @@ maneuver = add_component(entity, Maneuver)
 @bp_check(get_component(world, StrafingManeuver)[1] == maneuver)
 @bp_check(get_component(entity, Maneuver) == maneuver)
 @bp_check(get_component(world, Maneuver)[1] == maneuver)
+@bp_check(Set(get_components(entity, AbstractComponent)) ==
+           Set([pos, speed, maneuver]))
+@bp_check(Set(get_components(world, AbstractComponent)) ==
+           Set([pos, speed, maneuver]))
 @bp_check(count_components(entity, StrafingManeuver) === 1)
 @bp_check(count_components(entity, Maneuver) === 1)
+@bp_check(count_components(entity, AbstractComponent) === 3)
 @bp_check(count_components(world, StrafingManeuver) === 1)
 @bp_check(count_components(world, Maneuver) === 1)
+@bp_check(count_components(world, AbstractComponent) === 3)
 
 tick_world(world, @f32(2))
 @bp_check(has_component(entity, StrafingManeuver))
@@ -129,5 +134,16 @@ tick_world(world, @f32(0.0001))
 @bp_check(!has_component(entity, StrafingManeuver))
 @bp_check(count_components(entity, StrafingManeuver) === 0)
 @bp_check(count_components(entity, Maneuver) === 0)
+@bp_check(count_components(world, AbstractComponent) === 2)
 @bp_check(count_components(world, StrafingManeuver) === 0)
 @bp_check(count_components(world, Maneuver) === 0)
+@bp_check(count_components(world, AbstractComponent) === 2)
+
+# Test reset_world()
+reset_world(world)
+@bp_check(count_components(world, AbstractComponent) === 0)
+
+
+if exists(BplusTools.ECS.PRINT_COMPONENT_CODE)
+    close(BplusTools.ECS.PRINT_COMPONENT_CODE)
+end

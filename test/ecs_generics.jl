@@ -1,4 +1,4 @@
-# BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
+BplusTools.ECS.PRINT_COMPONENT_CODE = open("test.txt", "w")
 
 world = World()
 en = add_entity(world)
@@ -110,6 +110,8 @@ c_Ad_no.set_from_type(UInt16)
 @bp_check(count_components(en, Ad{true}) === 1)
 @bp_check(count_components(en, Ad{false}) === 1)
 @bp_check(count_components(en, Ad) === 2)
+@bp_check(count_components(en, A) === 5)
+@bp_check(count_components(en, AbstractComponent) === 5)
 @bp_check(get_component(world, Aa        )[1] === c_Aa)
 @bp_check(get_component(world, Ab{2}     )[1] === c_Ab)
 @bp_check(get_component(world, Ab{3}     )    === nothing)
@@ -142,6 +144,8 @@ c_Ad_no.set_from_type(UInt16)
 @bp_check(count_components(world, Ad{true}) === 1)
 @bp_check(count_components(world, Ad{false}) === 1)
 @bp_check(count_components(world, Ad) === 2)
+@bp_check(count_components(world, A) === 5)
+@bp_check(count_components(world, AbstractComponent) === 5)
 
 # Define "B" components to test promises, and builtin functions.
 @component B {abstract} begin
@@ -218,6 +222,7 @@ c_Bb.stringify_self()
 @bp_check(count_components(en, Bb{v3f}    ) === 1)
 @bp_check(count_components(en, Bb{Int8}   ) === 0)
 @bp_check(count_components(en, Bb         ) === 1)
+@bp_check(count_components(en, AbstractComponent) === 8)
 @bp_check(get_component(world, Ba{Float64})[1] === c_B)
 @bp_check(get_component(world, Ba{UInt8}  )[1] === c_Ba)
 @bp_check(get_component(world, Ba{UInt16} )    === nothing)
@@ -241,6 +246,7 @@ c_Bb.stringify_self()
 @bp_check(count_components(world, Bb{v3f}    ) === 1)
 @bp_check(count_components(world, Bb{Int8}   ) === 0)
 @bp_check(count_components(world, Bb         ) === 1)
+@bp_check(count_components(world, AbstractComponent) === 8)
 
 # Test TICK().
 tick_world(world, 0.1f0)
@@ -264,6 +270,33 @@ remove_entity(world, en)
 @bp_check(c_Bb.t == zero(v3f), c_Bb)
 # Add the entity back for future tests.
 en = add_entity(world)
+
+
+#DEBUG:
+# @component C{I<:Integer} {abstract} begin
+#     i::I
+# end
+# field_names(::Type{C}) = tuple(:i)
+# field_type(::Type{C}, ::Val{i}, I) = :( $I )
+
+# mutable struct Cb{J} <: C{J}
+#     i::$(field_type(C, Val(:i), :J))
+# end
+
+# @component Ca <: C{Int16} begin
+#     CONSTRUCT(i = -16) = SUPER(Int16(i))
+#     get() = -this.i
+# end
+# @component Cb{J} <: C{J} begin
+#     CONSTRUCT(i) = SUPER(i)
+#     get() = this.i
+#     con(j) = (this.i -= j)
+# end
+# @component Cc <: C{Int8} begin
+#     CONSTRUCT() = SUPER()
+#     get() = this.i
+# end
+#DEBUG:
 
 # Define "C" components to test a generic parent type.
 @component C{I<:Integer} {abstract} begin
@@ -324,6 +357,7 @@ c_Cb.con(5)
 @bp_check(count_components(en, C{UInt32} ) === 1)
 @bp_check(count_components(en, C{Int8}   ) === 0)
 @bp_check(count_components(en, C         ) === 3)
+@bp_check(count_components(en, AbstractComponent) === 3)
 @bp_check(Set(get_components(world, Ca)) == Set([ (c_C, en), (c_Ca, en) ]))
 @bp_check(get_component(world, Cb{UInt32})[1] === c_Cb)
 @bp_check(get_component(world, Cb{Int32} )    === nothing)
@@ -344,6 +378,33 @@ c_Cb.con(5)
 @bp_check(count_components(world, C{UInt32} ) === 1)
 @bp_check(count_components(world, C{Int8}   ) === 0)
 @bp_check(count_components(world, C         ) === 3)
-# Check a specific error-case that I've found:
+@bp_check(count_components(world, AbstractComponent) === 3)
+# Check a specific error-case that I tried to find:
 c_Cc = add_component(en, Cc)
 @bp_check(c_Cc.i == typemin(Int8), c_Cc)
+
+# Define "D" components to test specific error cases I found in the wild.
+@component D{I} {abstract} begin
+    # Using 'I' as a type param in the field:
+    dict::Dict{String, I}
+    CONSTRUCT() = (this.dict = Dict{String, I}())
+end
+@component Da <: D{Int32} begin
+    CONSTRUCT(hi_value) = begin
+        SUPER()
+        this.dict["hi"] = convert(Int32, hi_value)
+    end
+end
+c_Da = add_component(en, Da, 42)
+@bp_check(c_Da isa Da, c_Da)
+@bp_check(c_Da isa D, supertype(typeof(c_Da)))
+@bp_check(c_Da.dict isa Dict{String, Int32}, c_Da)
+@bp_check(c_Da.dict == Dict("hi"=>Int32(42)))
+
+# Test reset_world():
+reset_world(world)
+@bp_check(count_components(world, AbstractComponent) == 0)
+
+if exists(BplusTools.ECS.PRINT_COMPONENT_CODE)
+    close(BplusTools.ECS.PRINT_COMPONENT_CODE)
+end

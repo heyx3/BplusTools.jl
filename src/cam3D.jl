@@ -46,7 +46,7 @@ cam_projection_mat(p::PerspectiveProjection{F}) where {F} = m4_projection(
     p.vertical_fov_degrees
 )
 
-export PerspectiveProjection, OrthoProjection, Cam3D,
+export PerspectiveProjection, OrthographicProjection, Cam3D,
        cam_rightward, cam_basis, cam_view_mat, cam_projection_mat
 
 

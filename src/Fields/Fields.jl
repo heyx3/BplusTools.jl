@@ -40,6 +40,7 @@ export AbstractField, field_input_size, field_output_size, field_component_type
 
 
 include("interface.jl")
+include("tree_queries.jl")
 include("dsl.jl")
 
 include("basics.jl")

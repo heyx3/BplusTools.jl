@@ -487,3 +487,23 @@ end
 
 
 #TODO: Test sample_field()
+
+
+# Test tree-traversal.
+@bp_test_no_allocations(field_input_count(field14), 4)
+@bp_test_no_allocations(field_input_get(field14, 1) isa SubtractField, true,
+                          field_input_get(field14, 1))
+@bp_test_no_allocations(field_input_get(field14, 2) isa DivideField, true,
+                          field_input_get(field14, 2))
+@bp_test_no_allocations(field_input_get(field14, 3) isa MinField, true,
+                          field_input_get(field14, 3))
+@bp_test_no_allocations(field_input_get(field14, 4) isa MaxField, true,
+                          field_input_get(field14, 4))
+@bp_test_no_allocations(field_input_get(field_input_get(field_input_get(field14, 4), 2), 1),
+                        PosField{2, Float32}())
+@bp_test_no_allocations(field_input_set(field_input_get(field14, 1), 2, ConstantField{2}(Vec(@f32 20))),
+                        # Note that the first input has alread been swizzled to 2D output.
+                        SubtractField(field_input_get(field_input_get(field14, 1), 1),
+                                      SwizzleField(ConstantField{2}(Vec(@f32 20)), :xx)))
+
+println("#TODO: Test field_visit_depth_first()")

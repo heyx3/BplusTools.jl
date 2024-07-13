@@ -86,6 +86,16 @@ end
     end
 end
 
+field_input_count(::SwizzleField) = 1
+field_input_get(s::SwizzleField, i::Integer) = begin
+    @bp_fields_assert(i == 1, "Invalid index: ", i)
+    return s.field
+end
+field_input_set(s::SwizzleField{NIn, NOut, F, Swizzle}, i::Integer, v::AbstractField) where {NIn, NOut, F, Swizzle} = begin
+    @bp_fields_assert(i == 1, "Invalid index: ", i)
+    return SwizzleField{NIn, NOut, F, Swizzle, typeof(v)}(v)
+end
+
 # Swizzling can be done with the property syntax (e.x. "pos.y"),
 #    or with array accesses (e.x. "pos[1, 3, 2]" is like "pos.xzy").
 function field_from_dsl_expr(::Val{:.}, ast::Expr, context::DslContext, state::DslState)
@@ -143,7 +153,8 @@ end
 export GradientField
 
 "Constructor for a GradientField that appends all the output gradients together into one vector"
-GradientField(field::AbstractField{NIn, NOut, F}) where {NIn, NOut, F} = GradientField{NIn, NIn * NOut, F, typeof(field), Nothing}(field)
+GradientField(field::AbstractField{NIn, NOut, F}) where {NIn, NOut, F} = GradientField{NIn, NIn * NOut, F, typeof(field), Nothing}(field, nothing)
+GradientField(field::AbstractField{NIn, NOut, F}, dir) where {NIn, NOut, F} = GradientField{NIn, NIn * NOut, F, typeof(field), typeof(dir)}(field, dir)
 
 prepare_field(g::GradientField{NIn, NOut, F, TField, TDir}) where {NIn, NOut, F, TField, TDir} =
     if TDir isa AbstractField
@@ -181,6 +192,23 @@ prepare_field(g::GradientField{NIn, NOut, F, TField, TDir}) where {NIn, NOut, F,
     end
 end
 
+field_input_count(g::GradientField) = (g.dir isa AbstractField) ? 2 : 1
+field_input_get(g::GradientField, i::Integer) = begin
+    @bp_fields_assert(i == 1 || (g.dir isa AbstractField && i == 2), "Invalid index: ", i)
+    return if i == 1
+        g.field
+    else
+        g.dir::AbstractField
+    end
+end
+field_input_set(s::GradientField{NIn, NOut, F}, i::Integer, v::AbstractField) where {NIn, NOut, F} = begin
+    @bp_fields_assert(i == 1 || i == 2, "Invalid index: ", i)
+    return if i == 1
+        GradientField(v, s.dir)
+    else
+        GradientField(s.field, v)
+    end
+end
 
 # Gradients are specified as a function call, with special internal syntax:
 #    "gradient([field], [dir])"
@@ -280,6 +308,16 @@ end
     end
 end
 
+field_input_count(a::AppendField) = length(a.inputs)
+field_input_get(a::AppendField, i::Integer) = a.inputs[i]
+field_input_set(a::AppendField, i::Integer, v::AbstractField) = AppendField(ntuple(Val(length(a.inputs))) do j
+    if i == j
+        v
+    else
+        a.inputs[j]
+    end
+end...)
+
 # Append in the DSL uses the braces syntax, e.x. '{ pos, 1 }'.
 function field_from_dsl_expr(::Val{:braces}, ast::Expr, context::DslContext, state::DslState)
     args = map(arg -> field_from_dsl(arg, context, state), ast.args)
@@ -307,6 +345,7 @@ export ConversionField
 ConversionField( input::AbstractField{NIn, NOut, FIn},
                  FOut::Type{<:Real}
                ) where {NIn, NOut, FIn} = ConversionField{NIn, NOut, FIn, FOut, typeof(input)}(input)
+conversion_field_out_type(::ConversionField{NIn, NOut, FIn, FOut}) where {NIn, NOut, FIn, FOut} = FOut
 
 prepare_field(c::ConversionField) = prepare_field(c.input)
 
@@ -316,6 +355,16 @@ get_field(c::ConversionField{NIn, NOut, FIn, FOut}, pos::Vec{NIn, FOut}, prep_da
     convert(Vec{NOut, FOut}, get_field(c.input, convert(Vec{NIn, FIn}, pos), prep_data))
 get_field_gradient(c::ConversionField{NIn, NOut, FIn, FOut}, pos::Vec{NIn, FOut}, prep_data) where {NIn, NOut, FIn, FOut} =
     convert(Vec{NIn, Vec{NOut, FOut}}, get_field_gradient(c.input, convert(Vec{NIn, FIn}, pos), prep_data))
+
+field_input_count(::ConversionField) = 1
+field_input_get(c::ConversionField, i::Integer) = begin
+    @bp_fields_assert(i == 1, "Invalid index ", i)
+    return c.input
+end
+field_input_set(c::ConversionField, i::Integer, v::AbstractField) = begin
+    @bp_fields_assert(i == 1, "Invalid index ", i)
+    return ConversionField(v, conversion_field_out_type(c))
+end
 
 # The DSL is done with the "=>" operator. E.x. "my_field => Float64"
 function field_from_dsl_func(::Val{:(=>)}, context::DslContext, state::DslState, args::Tuple)

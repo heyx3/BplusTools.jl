@@ -1,7 +1,7 @@
 name = "BplusTools"
 uuid = "9c855568-ef52-4907-8d6a-2b3bbb89a4a6"
 authors = ["William Manning <manning.w27@gmail.com>"]
-version = "0.2.1"
+version = "0.2.2"
 
 [deps]
 BplusApp = "6498524c-785b-4e26-b825-b7be109d6de7"
@@ -16,7 +16,7 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [compat]
 julia = "1.9"
-BplusApp = "0.2.0"
+BplusApp = "0.2.2"
 BplusCore = "0.2.0"
 CImGui = "=1.82.0"
 DataStructures = "0.18.15"

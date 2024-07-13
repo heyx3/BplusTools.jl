@@ -56,6 +56,20 @@ function get_field_gradient( d::DotProductField{NIn, NParamOut, F},
     return map(f -> Vec{1, F}(f), gradient)
 end
 
+@inline field_input_count(::DotProductField) = 2
+@inline field_input_get(d::DotProductField, i::Integer) = if isone(i)
+    d.field1
+else
+    @bp_fields_assert(i == 2, "Invalid index ", i)
+    d.field2
+end
+@inline field_input_set(d::DotProductField, i::Integer, v::AbstractField) = if isone(i)
+    DotProductField(v, d.field2)
+else
+    @bp_fields_assert(i == 2, "Invalid index ", i)
+    DotProductField(d.field1, v)
+end
+
 # Dot product can be written in the DSL with 'vdot' or '⋅'.
 function field_from_dsl_func(::Val{:vdot}, context::DslContext, state::DslState, args::Tuple)
     (a, b) = field_from_dsl.(args, Ref(context), Ref(state))
@@ -137,6 +151,20 @@ function get_field_gradient( c::CrossProductField{NIn, F},
                Val(NIn))
 end
 
+@inline field_input_count(::CrossProductField) = 2
+@inline field_input_get(c::CrossProductField, i::Integer) = if isone(i)
+    c.field1
+else
+    @bp_fields_assert(i == 2, "Invalid index ", i)
+    c.field2
+end
+@inline field_input_set(c::CrossProductField, i::Integer, v::AbstractField) = if isone(i)
+    CrossProductField(v, c.field2)
+else
+    @bp_fields_assert(i == 2, "Invalid index ", i)
+    CrossProductField(c.field1, v)
+end
+
 # Cross product can be written in the DSL with 'vcross' or '×'.
 function field_from_dsl_func(::Val{:vcross}, context::DslContext, state::DslState, args::Tuple)
     (a, b) = field_from_dsl.(args, Ref(context), Ref(state))
@@ -180,6 +208,18 @@ function get_field_gradient( l::LengthSqrField{NIn, NParamOut, F},
     # Each derivative along an input axis is a scalar, but should be formatted as a 1D vector.
     return map(f -> Vec{1, F}(f), my_gradient)
 end
+
+@inline field_input_count(::LengthSqrField) = 1
+@inline field_input_get(ls::LengthSqrField, i::Integer) = begin
+    @bp_fields_assert(i == 1, "Invalid index ", i)
+    return ls.field
+end
+@inline field_input_set(ls::LengthSqrField, i::Integer, v::AbstractField) = begin
+    @bp_fields_assert(i == 1, "Invalid index ", i)
+    return LengthSqrField(v)
+end
+
+# DSL hookup done below
 
 
 ##   Simpler vector ops   ##

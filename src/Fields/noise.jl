@@ -31,6 +31,16 @@ function get_field( p::PerlinField{NIn, F},
     return Vec{1, F}(perlin(noise_pos, p.seeds))
 end
 
+field_input_count(::PerlinField) = 1
+field_input_get(p::PerlinField, i::Integer) = begin
+    @bp_fields_assert(i == 1, "Invalid index: ", i)
+    return p.pos
+end
+field_input_set(p::PerlinField, i::Integer, val::AbstractField) = begin
+    @bp_fields_assert(i == 1, "Invalid index: ", i)
+    return PerlinField(val, p.seeds)
+end
+
 # The DSL is a mostly-normal function, "perlin([pos expr])".
 # However, you can pass any number of Real numbers as extra arguments,
 #    which are used as seeds for the PRNG.

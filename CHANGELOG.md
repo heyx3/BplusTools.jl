@@ -1,3 +1,7 @@
+# v0.2.2
+
+* Added new interface functions to *Fields* for working with the tree of expressions within any `AbstractField`
+
 # v0.2.1
 
 * Fixed broken export of `OrthographicProjection`

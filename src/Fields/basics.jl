@@ -19,6 +19,7 @@ ConstantField(template::AbstractField{NIn, NOut, F}, value::Vec{NOut}) where {NI
 
 @inline get_field(f::ConstantField{NIn, NOut, F}, pos::Vec{NIn, F}, ::Nothing) where {NIn, NOut, F} = f.value
 @inline get_field_gradient(f::ConstantField{NIn, NOut, F}, pos::Vec{NIn, F}, ::Nothing) where {NIn, NOut, F} = zero(GradientType(f))
+@inline field_input_count(::ConstantField) = 0
 
 # In the DSL, constant 1D fields can be created with a number literal.
 # AppendField then allows you to create constants of higher dimensions.
@@ -51,6 +52,7 @@ function get_field_gradient(::PosField{N, F}, ::Vec{N, F}, ::Nothing) where {N, 
         return derivative
     end
 end
+@inline field_input_count(::PosField) = 0
 
 # The pos field is represented in the DSL by the special constant "pos".
 const POS_FIELD_NAME = :pos
@@ -88,6 +90,17 @@ function TextureField( pixels::AbstractArray{Vec{NOut, F}, NUV},
                         typeof(pixels), Val(wrapping), Val(sampling),
                         typeof(pos)
                        }(pixels, pos)
+end
+@inline field_input_count(::TextureField) = 1
+@inline field_input_get(t::TextureField, i::Integer) = begin
+    @bp_fields_assert(i == 1, "Invalid index: ", i)
+    return t.pos
+end
+@inline field_input_set(t::TextureField, i::Integer, v::AbstractField) = begin
+    @bp_fields_assert(i == 1, "Invalid index: ", i)
+    return TextureField(t.pixels, v,
+                        wrapping=texture_field_wrapping(t),
+                        sampling=texture_field_sampling(t))
 end
 
 @inline texture_field_wrapping(tf::TextureField)::E_WrapModes = texture_field_wrapping(typeof(tf))
@@ -310,7 +323,12 @@ export SampleModes, E_SampleModes, TextureField,
 #  AggregateField  #
 ####################
 
-"A field that has its own identity, but is definable in terms of simpler Fields"
+"
+A field that has its own identity, but is definable in terms of simpler Fields.
+
+If you define one of these, it's recommended to also
+    implement `dsl_from_field()` and `field_from_dsl()`.
+"
 struct AggregateField{ ID, # A Symbol identifying this particular kind of aggregate.
                        NIn, NOut, F,
                        TDefinition<:AbstractField{NIn, NOut, F}
@@ -324,4 +342,7 @@ end
 @inline prepare_field(s::AggregateField) = prepare_field(s.actual_field)
 @inline get_field(s::AggregateField, pos::Vec, prepared_data) = get_field(s.actual_field, pos, prepared_data)
 @inline get_field_gradient(s::AggregateField, pos::Vec, prepared_data) = get_field_gradient(s.actual_field, pos, prepared_data)
+@inline field_input_count(a::AggregateField) = field_input_count(a.actual_field)
+@inline field_input_get(a::AggregateField, i::Integer) = field_input_get(a.actual_field, i)
+@inline field_input_set(s::AggregateField{ID}, i::Integer, v::AbstractField) where {ID} = AggregateField{ID}(field_input_set(s.actual_field, i, v))
 @inline dsl_from_field(s::AggregateField, args...; kw...) = dsl_from_field(s.actual_field, args...; kw...)

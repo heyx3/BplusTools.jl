@@ -157,12 +157,12 @@ image_field = @field(2, Float16, dsl_state,
 macro field(args...)
     return field_macro_impl(args...)
 end
-field_macro_impl(input_dims_expr, component_type_name::Symbol, field_expr) = field_macro_impl(
+field_macro_impl(input_dims_expr, component_type_name, field_expr) = field_macro_impl(
     input_dims_expr, component_type_name,
     :( DslState() ),
     field_expr
 )
-function field_macro_impl(input_dims_expr, component_type_name::Symbol,
+function field_macro_impl(input_dims_expr, component_type_name,
                           dsl_state_expr, field_expr)
     return :(
         let context = DslContext(Int($input_dims_expr),

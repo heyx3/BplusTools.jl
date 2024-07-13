@@ -58,7 +58,7 @@ function get_field_gradient( f::AbstractField{NIn, NOut, F},
     run = vselect(one(Gradient), -one(Gradient), pick_sides)
     return rise / run
 end
-"Picks an epsilon value for computing the gradient of a field with finite-differences."
+"Picks an epsilon value for computing the gradient of a field with finite-differences"
 field_gradient_epsilon(f::AbstractField{NIn, NOut, F}, pos::Vec{NIn, F}, prepared_data) where {NIn, NOut, F} = field_gradient_epsilon(F)
 field_gradient_epsilon(::Type{Float16}) = Float16(0.05)
 field_gradient_epsilon(::Type{Float32}) = Float32(0.0001)

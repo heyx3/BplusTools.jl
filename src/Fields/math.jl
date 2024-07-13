@@ -150,13 +150,13 @@ macro make_math_field(name, dsl_func_name, defs_expr)
 
     # Generate the final code.
     return quote
-        Core.@__doc__ struct $struct_name{$NIn, $NOut, $F, $TInputs <: Tuple} <: AbstractMathField{$NIn, $NOut, $F}
+        Core.@__doc__ struct $struct_name{$NIn, $NOut, $F, $TInputs <: Tuple} <: $(@__MODULE__).AbstractMathField{$NIn, $NOut, $F}
             $field_inputs::$TInputs
-            function $struct_name_esc($field_inputs::Union{AbstractField{$NIn, NOut_, $F},
-                                                           AbstractField{$NIn, 1, $F}}...
+            function $struct_name_esc($field_inputs::Union{$(@__MODULE__).AbstractField{$NIn, NOut_, $F},
+                                                           $(@__MODULE__).AbstractField{$NIn, 1, $F}}...
                                      ) where {$NIn, NOut_, $F}
                 # Type inference needs some help if all fields are 1D.
-                $NOut = if all(f -> field_output_size(f) == 1, $field_inputs)
+                $NOut = if all(f -> $(@__MODULE__).field_output_size(f) == 1, $field_inputs)
                             1
                         else
                             NOut_
@@ -168,16 +168,16 @@ macro make_math_field(name, dsl_func_name, defs_expr)
                           $name, ". Constraints: ", $(string(input_is_valid_expr)))
                 end
 
-                processed_inputs = process_inputs(Val($NIn), Val($NOut), $F, $field_inputs)
+                processed_inputs = $(@__MODULE__).process_inputs(Val($NIn), Val($NOut), $F, $field_inputs)
                 return new{$NIn, $NOut, $F, typeof(processed_inputs)}(processed_inputs)
             end
         end
         export $struct_name
 
-        function $(esc(:get_field))( $local_field::$struct_name_esc{$NIn, $NOut, $F, $TInputs},
-                                     $local_pos::Vec{$NIn, $F},
-                                     $local_prep_data::Tuple
-                                   ) where {$NIn, $NOut, $F, $TInputs}
+        function $(@__MODULE__).get_field( $local_field::$struct_name_esc{$NIn, $NOut, $F, $TInputs},
+                                           $local_pos::Vec{$NIn, $F},
+                                           $local_prep_data::Tuple
+                                         ) where {$NIn, $NOut, $F, $TInputs}
             $(locals_for_value...)
             return $value_computation
         end
@@ -185,10 +185,10 @@ macro make_math_field(name, dsl_func_name, defs_expr)
             if isnothing(gradient_computation)
                 :( )
             else; :(
-                function $(esc(:get_field_gradient))( $local_field::$struct_name_esc{$NIn, $NOut, $F, $TInputs},
-                                                      $local_pos::Vec{$NIn, $F},
-                                                      $local_prep_data::Tuple
-                                                    ) where {$NIn, $NOut, $F, $TInputs}
+                function $(@__MODULE__).get_field_gradient( $local_field::$struct_name_esc{$NIn, $NOut, $F, $TInputs},
+                                                            $local_pos::Vec{$NIn, $F},
+                                                            $local_prep_data::Tuple
+                                                          ) where {$NIn, $NOut, $F, $TInputs}
                     $(locals_for_gradient...)
                     return $gradient_computation
                 end
@@ -196,14 +196,30 @@ macro make_math_field(name, dsl_func_name, defs_expr)
             end
         )
 
-        function $(esc(:field_from_dsl_func))( ::Val{Symbol($dsl_func_name)},
-                                               context::DslContext, state::DslState,
-                                               args::Tuple
-                                             )
-            $struct_name(field_from_dsl.(args, Ref(context), Ref(state))...)
+        @inline $(@__MODULE__).field_input_count(f::$struct_name_esc{$NIn, $NOut, $F, $TInputs}) where {$NIn, $NOut, $F, $TInputs} = tuple_length($TInputs)
+        @inline $(@__MODULE__).field_input_get(f::$struct_name_esc, i::Integer) = f.$field_inputs[i]
+        @inline function $(@__MODULE__).field_input_set(f::$struct_name_esc, i::Integer, v::$(@__MODULE__).AbstractField)
+            N = Val($(@__MODULE__).field_input_count(f))
+            @bp_fields_assert(i > 0 && i <= val_type(N), "Invalid index: ", i, " of ", val_type(N))
+            new_args = ntuple(N) do j
+                if i == j
+                    v
+                else
+                    f.$field_inputs[j]
+                end
+            end
+            return $struct_name_esc(new_args...)
         end
-        function $(esc(:dsl_from_field))(field::$struct_name_esc)
-            return :( $(Symbol($dsl_func_name))($(dsl_from_field.(field.$field_inputs)...)) )
+
+        function $(@__MODULE__).field_from_dsl_func( ::Val{Symbol($dsl_func_name)},
+                                                     context::$(@__MODULE__).DslContext, state::$(@__MODULE__).DslState,
+                                                     args::Tuple
+                                                   )
+            $struct_name($(@__MODULE__).field_from_dsl.(args, Ref(context), Ref(state))...)
+        end
+
+        function $(@__MODULE__).dsl_from_field(field::$struct_name_esc)
+            return :( $(Symbol($dsl_func_name))($($(@__MODULE__).dsl_from_field.(field.$field_inputs)...)) )
         end
     end
 end

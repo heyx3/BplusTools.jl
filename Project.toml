@@ -17,7 +17,7 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 [compat]
 julia = "1.9"
 BplusApp = "0.2.2"
-BplusCore = "0.2.0"
+BplusCore = "0.2.1"
 CImGui = "=1.82.0"
 DataStructures = "0.18.15"
 LibCImGui = "=1.82.2"

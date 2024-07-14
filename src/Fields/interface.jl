@@ -17,6 +17,9 @@ function get_field(f::AbstractField{NIn, NOut, F}, pos::Vec{NIn, F}, prepared_da
 end
 @inline get_field(f, pos) = get_field(f, pos, prepare_field(f))
 
+# Add an overload for floats that wraps into Vec{1, F}.
+@inline get_field(fi::AbstractField, fo::AbstractFloat, extra...) = get_field(fi, Vec(fo), extra...).x
+
 
 "
 The type of a field's gradient (i.e. per-component derivative).

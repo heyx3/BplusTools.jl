@@ -46,17 +46,19 @@ Invokes your visitor function, providing:
   * The field itself (usually a copy, as fields are supposed to be immutable types)
   * A *temporary* list of the path to this field, as a sequence of indices traversing the field tree.
 
+Note that the first visited node will be the root, and its path will be an empty list.
+
 For optimized memory use, you can provide a pre-allocated buffer.
 
 Note that this function is type-unstable!
 It's recommended to make your lambda' first parameter `@nospecialize` to reduce JIT overhead.
 "
-function field_visit_depth_first(visitor, root::AbstractField, buffer::Vector{Int} = [ ])
+function field_visit_depth_first(visitor, root::AbstractField, buffer::Vector{Int} = Int[ ])
     @nospecialize root
 
     function recursion(f::AbstractField)
         @nospecialize f
-        visitor(f)
+        visitor(f, buffer)
         for i in 1:field_input_count(f)::Int
             push!(buffer, i)
             recursion(field_input_get(f, i)::AbstractField)
@@ -67,6 +69,7 @@ function field_visit_depth_first(visitor, root::AbstractField, buffer::Vector{In
     empty!(buffer)
     recursion(root)
 end
+export field_visit_depth_first
 
 #TODO: postwalk/pre-walk equivalents
 #TODO: Breadth-first version

@@ -1,6 +1,7 @@
 # v0.2.2
 
 * Added new interface functions to *Fields* for working with the tree of expressions within any `AbstractField`
+* Added an overload of `get_field()` for working with floats directly rather than `Vec{1}`.
 
 # v0.2.1
 

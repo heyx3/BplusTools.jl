@@ -120,11 +120,16 @@ const field14 = AddField(
     ),
     MaxField(
         SinField(PosField{2, Float32}()),
-        ModField(PosField{2, Float32}(),
-                 ClampField(MultiplyField(PosField{2, Float32}(),
-                                          PosField{2, Float32}()),
-                            ConstantField{2}(Vec(@f32 4.5)),
-                            ConstantField{2}(Vec(@f32 8.5))))
+        ModField(
+            PosField{2, Float32}(),
+            ClampField(
+                MultiplyField(
+                    PosField{2, Float32}(),
+                    PosField{2, Float32}()
+                ),
+                ConstantField{2}(Vec(@f32 4.5)),
+                ConstantField{2}(Vec(@f32 8.5))
+            ))
     )
     #TODO: Step, Lerp, Smoothstep, Smootherstep
 )
@@ -506,4 +511,49 @@ end
                         SubtractField(field_input_get(field_input_get(field14, 1), 1),
                                       SwizzleField(ConstantField{2}(Vec(@f32 20)), :xx)))
 
-println("#TODO: Test field_visit_depth_first()")
+# Test field_visit_depth_first():
+visited_paths = Vector{Vector{Int}}()
+field_visit_depth_first(field14) do field, path
+    push!(visited_paths, copy(path))
+end
+expected_visited_paths = Vector{Int}[
+    [ ],
+    [ 1 ],
+    [ 1, 1 ],
+    [ 1, 2 ],
+
+    [ 2 ],
+    [ 2, 1 ],
+    [ 2, 1, 1 ],
+    [ 2, 1, 1, 1 ],
+    [ 2, 1, 1, 2 ],
+    [ 2, 1, 2 ],
+    [ 2, 1, 2, 1 ],
+    [ 2, 1, 2, 1, 1 ],
+    [ 2, 2 ],
+
+    [ 3 ],
+    [ 3, 1 ],
+    [ 3, 1, 1 ],
+    [ 3, 2 ],
+    [ 3, 2, 1 ],
+
+    [ 4 ],
+    [ 4, 1 ],
+    [ 4, 1, 1 ],
+    [ 4, 2 ],
+    [ 4, 2, 1 ],
+    [ 4, 2, 2 ],
+    [ 4, 2, 2, 1 ],
+    [ 4, 2, 2, 1, 1 ],
+    [ 4, 2, 2, 1, 2 ],
+    [ 4, 2, 2, 2 ],
+    [ 4, 2, 2, 3 ]
+]
+for (i, (expected, actual)) in enumerate(zip(expected_visited_paths, visited_paths))
+    @bp_check(expected == actual,
+              "Expected path ", i, " to be\n", expected, "\n but it was\n", actual)
+end
+@bp_check(length(visited_paths) == length(expected_visited_paths),
+          "Missing ", length(expected_visited_paths) - length(visited_paths),
+            " paths (negative means there are extra)!")

@@ -359,17 +359,52 @@ end
                (denominator_value * denominator_value)
     end
 end
-"`pow(x, y) = x^y`"
+"
+`pow(x, y) = x^y`.
+
+If x is negative and y isn't an integer (e.x. `pow(-1, 0.5)`), this function is undefined and just returns 0.
+If you want it to default to something other than 0, pass that as a third argument.
+"
 @make_math_field Pow "pow" begin
-    INPUT_COUNT = 2
-    value = input_values[1] ^ input_values[2]
+    INPUT_COUNT = 2:3
+    value = let is_y_int::VecB = map(isinteger, input_values[2])
+        # Sanitize the exponent to avoid taking the root of a negative number.
+        has_invalid_value::VecB = (input_values[1] < 0) & (!is_y_int)
+        exponents = vselect(input_values[2], one(F), has_invalid_value)
+
+        # If we would have taken the root, return a fallback value instead.
+        fallback = if length(input_values) > 2
+            input_values[3]
+        else
+            zero(Vec{NOut, F})
+        end
+
+        vselect(input_values[1] ^ exponents, fallback, has_invalid_value)
+    end
 
     # Turns out, the derivative of u(x)^v(x) is a bit complicated.
     # Here's a reference: https://math.stackexchange.com/questions/3353508/what-is-the-derivative-of-a-function-of-the-form-uxvx
     GRADIENT_CALC_ALL_INPUT_VALUES = true
-    gradient = let (a,b) = input_values,
-                   (da, db) = input_gradients
-        (a^b) * ((b * (da / a)) + (db * map(log, a)))
+    gradient = let (a, b) = input_values[1:2],
+                   (da, db) = input_gradients[1:2]
+        # If pow is undefined (e.x. 'pow(-1, 0.5)') then we return either 0 or the third argument.
+        # If a is 0 and b is positive, then pow is defined
+        #    but the usual derivative formula is not, and needs a hard-coded 0.
+        is_special::VecB = (a <= zero(F))
+        is_invalid::VecB = is_special & (!map(f -> f>zero(F), b))
+        fallback_gradient = if length(input_values) > 2
+            input_gradients[3]
+        else
+            zero(Vec{NIn, Vec{NOut, F}})
+        end
+        fallback_a = vselect(a, one(typeof(a)), a <= zero(F))
+
+        # Compute the raw value (with sanitized inputs),
+        #    then insert the special a=0 case,
+        #    then handle the undefined cases.
+        raw_value = (fallback_a^b) * ((b * (da / fallback_a)) + (db * map(log, fallback_a)))
+        determinate_value = vselect(raw_value, zero(Vec{NIn, Vec{NOut, F}}), is_special)
+        vselect(determinate_value, fallback_gradient, is_invalid)
     end
 end
 @make_math_field Sqrt "sqrt" begin
@@ -380,7 +415,7 @@ end
     gradient = (convert(F, 0.5) / sqrt(input_values[1])) * input_gradients[1]
 end
 
-# Trig functions
+# Trig functions, in radians
 @make_math_field Sin "sin" begin
     INPUT_COUNTS = 1
     value = map(sin, input_values[1])
@@ -402,6 +437,54 @@ end
 
     GRADIENT_CALC_ALL_INPUT_VALUES = true
     gradient = input_gradients[1] * square(map(sec, input_values[1]))
+end
+@make_math_field Asin "asin" begin
+    INPUT_COUNTS = 1
+    value = map(asin, input_values[1])
+
+    # asin'(f(x)) = f'(x)/sqrt(1 - f(x)^2)
+    GRADIENT_CALC_ALL_INPUT_VALUES = true
+    gradient = let determinant = one(F) - (input_values[1] * input_values[1])
+        vselect(zero(Vec{NIn, Vec{NOut, F}}),
+                input_gradients[1] / sqrt(determinant),
+                determinant <= zero(F))
+    end
+end
+@make_math_field Acos "acos" begin
+    INPUT_COUNTS = 1
+    value = map(acos, input_values[1])
+
+    # acos'(f(x)) = -f'(x)/sqrt(1 - f(x)^2)
+    GRADIENT_CALC_ALL_INPUT_VALUES = true
+    gradient = let determinant = one(F) - (input_values[1] * input_values[1])
+        vselect(zero(Vec{NIn, Vec{NOut, F}}),
+                input_gradients[1] / -sqrt(determinant),
+                determinant <= zero(F))
+    end
+end
+@make_math_field Atan "atan" begin
+    INPUT_COUNTS = 1
+    value = map(atan, input_values[1])
+
+    # atan'(f(x)) = f'(x) / (1 + f(x)^2)
+    GRADIENT_CALC_ALL_INPUT_VALUES = true
+    gradient = let determinant = one(F) + (input_values[1] * input_values[1])
+        vselect(zero(Vec{NIn, Vec{NOut, F}}),
+                input_gradients[1] / determinant,
+                determinant <= zero(F))
+    end
+end
+@make_math_field Atan2 "atan2" begin
+    INPUT_COUNTS = 2
+    value = Vec{NOut, F}(i -> atan2(input_values[1][i], input_values[2][i]))
+
+    # atan2'(y(p), x(p)) = atan2'(:, x(p)) + atan2'(y(p), :)
+    #                    = (x(p)*y'(p) - x'(p)*y(p)) / (x(p)^2 + y(p)^2)
+    GRADIENT_CALC_ALL_INPUT_VALUES = true
+    gradient = let (x,y) = input_values,
+                   (x′,y′) = input_gradients
+        ((x*y′) - (x′*y)) / ((x*x) + (y*y))
+    end
 end
 
 # Numeric stuff

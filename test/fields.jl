@@ -131,7 +131,6 @@ const field14 = AddField(
                 ConstantField{2}(Vec(@f32 8.5))
             ))
     )
-    #TODO: Step, Lerp, Smoothstep, Smootherstep
 )
 field14_expected(pos) = +(
     (@f32(3) - pos),
@@ -205,6 +204,19 @@ for pos in FIELD16_TEST_POSES
                             join(map(x -> sprint(io -> show(io, Binary(x))), pos), ','))
 end
 
+#TODO: Step, Lerp, Smoothstep, Smootherstep
+#TODO: acos, asin, atan, atan2
+
+# Test edge-cases of PowField.
+let make_c(f) = ConstantField{1}(Vec(f)),
+    make_pow(args...) = PowField(make_c.(args)...),
+    get_pow(args...) = get_field(make_pow(args...), Vec(4.4444)).x
+  @bp_test_no_allocations(get_pow(0.0, 0.0, 5.0), 0.0 ^ 0.0)
+  @bp_test_no_allocations(get_pow(0.0, -1.0, 5.0), 0.0 ^ (-1.0))
+  @bp_test_no_allocations(get_pow(-1.0, -3.0, 5.0), (-1.0) ^ (-3.0))
+  @bp_test_no_allocations(get_pow(-1.0, 0.2, 5.0), 5.0)
+  @bp_test_no_allocations(get_pow(-1.0, 0.2), 0.0)
+end
 
 # Test TextureField.
 const TEXTURE_FIELD_TESTS = Tuple{TextureField, Vector{<:Tuple{<:Union{Vec, Real}, Union{Vec, Real}}}}[
@@ -512,47 +524,56 @@ end
                                       SwizzleField(ConstantField{2}(Vec(@f32 20)), :xx)))
 
 # Test field_visit_depth_first():
-visited_paths = Vector{Vector{Int}}()
+visited_paths = Vector{Pair{Vector{Int}, DataType}}()
 field_visit_depth_first(field14) do field, path
-    push!(visited_paths, copy(path))
+    push!(visited_paths, copy(path) => typeof(field))
 end
-expected_visited_paths = Vector{Int}[
-    [ ],
-    [ 1 ],
-    [ 1, 1 ],
-    [ 1, 2 ],
+expected_visited_paths = Pair{Vector{Int}, Type}[
+    [ ] => AddField,
+    [ 1 ] => SubtractField,
+    [ 1, 1 ] => SwizzleField, # Auto-inserted on construction
+    [ 1, 1, 1 ] => ConstantField,
+    [ 1, 2 ] => PosField,
 
-    [ 2 ],
-    [ 2, 1 ],
-    [ 2, 1, 1 ],
-    [ 2, 1, 1, 1 ],
-    [ 2, 1, 1, 2 ],
-    [ 2, 1, 2 ],
-    [ 2, 1, 2, 1 ],
-    [ 2, 1, 2, 1, 1 ],
-    [ 2, 2 ],
+    [ 2 ] => DivideField,
+    [ 2, 1 ] => MultiplyField,
+    [ 2, 1, 1 ] => PowField,
+    [ 2, 1, 1, 1 ] => PosField,
+    [ 2, 1, 1, 2 ] => SwizzleField, # Auto-inserted on construction
+    [ 2, 1, 1, 2, 1 ] => ConstantField,
+    [ 2, 1, 2 ] => SqrtField,
+    [ 2, 1, 2, 1 ] => AbsField,
+    [ 2, 1, 2, 1, 1 ] => PosField,
+    [ 2, 2 ] => SwizzleField, # Auto-inserted on construction
+    [ 2, 2, 1 ] => ConstantField,
 
-    [ 3 ],
-    [ 3, 1 ],
-    [ 3, 1, 1 ],
-    [ 3, 2 ],
-    [ 3, 2, 1 ],
+    [ 3 ] => MinField,
+    [ 3, 1 ] => TanField,
+    [ 3, 1, 1 ] => PosField,
+    [ 3, 2 ] => CosField,
+    [ 3, 2, 1 ] => PosField,
 
-    [ 4 ],
-    [ 4, 1 ],
-    [ 4, 1, 1 ],
-    [ 4, 2 ],
-    [ 4, 2, 1 ],
-    [ 4, 2, 2 ],
-    [ 4, 2, 2, 1 ],
-    [ 4, 2, 2, 1, 1 ],
-    [ 4, 2, 2, 1, 2 ],
-    [ 4, 2, 2, 2 ],
-    [ 4, 2, 2, 3 ]
+    [ 4 ] => MaxField,
+    [ 4, 1 ] => SinField,
+    [ 4, 1, 1 ] => PosField,
+    [ 4, 2 ] => ModField,
+    [ 4, 2, 1 ] => PosField,
+    [ 4, 2, 2 ] => ClampField,
+    [ 4, 2, 2, 1 ] => MultiplyField,
+    [ 4, 2, 2, 1, 1 ] => PosField,
+    [ 4, 2, 2, 1, 2 ] => PosField,
+    [ 4, 2, 2, 2 ] => SwizzleField, # Auto-inserted on construction
+    [ 4, 2, 2, 2, 1] => ConstantField,
+    [ 4, 2, 2, 3 ] => SwizzleField, # Auto-inserted on construction
+    [ 4, 2, 2, 3, 1 ] => ConstantField
 ]
-for (i, (expected, actual)) in enumerate(zip(expected_visited_paths, visited_paths))
-    @bp_check(expected == actual,
-              "Expected path ", i, " to be\n", expected, "\n but it was\n", actual)
+for (i, ((expected_path, expected_type), (actual_path, actual_type))) in enumerate(zip(expected_visited_paths, visited_paths))
+    @bp_check(expected_path == actual_path,
+              "Expected path ", i, " to be ", expected, " (leading to a ", expected_type, "),",
+              "\nbut it was ", actual, " leading to ", field_input_get(field14, actual))
+    @bp_check(actual_type <: expected_type,
+              "Expected field ", i, " at path ", actual_path,
+                " to be ", expected_type, ", but it was ", actual_type)
 end
 @bp_check(length(visited_paths) == length(expected_visited_paths),
           "Missing ", length(expected_visited_paths) - length(visited_paths),

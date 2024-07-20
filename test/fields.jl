@@ -173,16 +173,20 @@ const field16 = AppendField(
         AddField(PosField{3, Float32}(),
                  ConstantField{3}(v3f(5, 0, 0))),
     ),
-    DotProductField(PosField{3, Float32}(),
-                    ConstantField{3}(v3f(1.5, 2.5, -3.5))),
-    LengthField(PosField{3, Float32}()),
+    TruncField(
+        DotProductField(PosField{3, Float32}(),
+                        ConstantField{3}(v3f(1.5, 2.5, -3.5)))
+    ),
+    FractField(LengthField(PosField{3, Float32}())),
     DistanceField(PosField{3, Float32}(),
                   ConstantField{3}(v3f(-10.101, 11.12, 0.5)))
 )
 field16_expected(pos) = vappend(
     vnorm(pos) × (pos + v3f(5, 0, 0)),
-    pos ⋅ v3f(1.5, 2.5, -3.5),
-    vlength(pos),
+    map(trunc, pos ⋅ v3f(1.5, 2.5, -3.5)),
+    let v = vlength(pos)
+        v - floor(v) #TODO: Add 'fract()' to BplusCore
+    end,
     vdist(pos, v3f(-10.101, 11.12, 0.5))
 )
 # Generate many random test cases, plus a few important ones
@@ -204,8 +208,9 @@ for pos in FIELD16_TEST_POSES
                             join(map(x -> sprint(io -> show(io, Binary(x))), pos), ','))
 end
 
-#TODO: Step, Lerp, Smoothstep, Smootherstep
+#TODO: step, lerp, smoothstep, smootherstep
 #TODO: acos, asin, atan, atan2
+#TODO: fract, trunc
 
 # Test edge-cases of PowField.
 let make_c(f) = ConstantField{1}(Vec(f)),

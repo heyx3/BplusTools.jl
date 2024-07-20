@@ -513,6 +513,22 @@ end
     # However, replacing this behavior with finite differences results in a less degenerative,
     #    more aesthetically-useful value.
 end
+"Gets the fractional part of a number, always positive (e.x. `fract(-0.1) == 0.9`)."
+@make_math_field Fract "fract" begin
+    INPUT_COUNT = 1
+    value = map(f -> (f - floor(f)), input_values[1])
+    # The gradient is unchanged except where we jump across integer boundaries,
+    #    at which point it is undefined, so let's just leave the gradient unchanged.
+    gradient = input_gradients[1]
+end
+"Gets the integer part of a number (e.x. `trunc(-2.8) == -2.0`)."
+@make_math_field Trunc "trunc" begin
+    INPUT_COUNT = 1
+    value = map(trunc, input_values[1])
+    # Gradient is zero almost everywhere. In the moment of transition between values, it's undefined.
+    # However, replacing this behavior with finite differences results in a less degenerative,
+    #    more aesthetically-useful value.
+end
 @make_math_field Abs "abs" begin
     INPUT_COUNT = 1
     value = map(abs, input_values[1])

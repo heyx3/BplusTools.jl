@@ -1,5 +1,6 @@
 # An internal interface is used to reference inherited behavior/data from parent components.
 #    Metadata:
+@nospecialize
 component_macro_field_names(T::Type{<:AbstractComponent} #= *without* type params =#) = error()
 component_macro_type_data(T::Type{<:AbstractComponent} # *without* type params
                           ) = # Returns a tuple of (field_types, original_type_param_names)
@@ -52,6 +53,7 @@ component_macro_configurable_execute(T, component, name_val,
                                      args...; kw_args...) = error(
     "No parent implementation exists for @configurable ", val_type(name_val), "(...)"
 )
+
 #    Utilities:
 component_field_print(component, field_name::Val, field_value                   , io) = print(io, field_value)
 component_field_print(component, field_name::Val, field_value::AbstractComponent, io) = print(io, "<", typeof(field_value), ">")
@@ -1352,3 +1354,4 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
     end
     return final_expr
 end
+@specialize

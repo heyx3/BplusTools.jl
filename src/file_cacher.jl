@@ -74,7 +74,7 @@ You can configure the cacher in a few ways:
   * If your response throws an error then `error_response`, mentioned below, is invoked.
 * `error_response(path, exception, trace[, old_data]) -> [fallback_data]` is called when a file fails to load or re-load.
   * By default it `@error`s and returns `nothing`.
-  * You can change it to, for example, return a fallback 'error data' object, or the previous version of the object.
+  * You can change it to throw the error, return a fallback 'error data' object, return the previous version of the object, etc
 * `check_interval_ms` is a range of wait times in between checking files for changes. A wait time is randomly chosen for each file,
      to prevent them from all checking the disk at once.
 * `relative_path` is the prefix for relative paths.
@@ -90,6 +90,7 @@ You can configure the cacher in a few ways:
     files::Dict{AbstractString, CachedData{TCached}} = Dict() # Stored as their absolute, canonical paths.
     buffer::Vector{AbstractString} = [ ] # Used within some functions
 end
+#TODO: Callbacks should be type-stable
 #TODO: Rewrite this so a separate Task constantly checks all the files, sleeping in between each one
 
 function default_cache_error_response(path, exception, trace, old_data = nothing)
@@ -173,7 +174,7 @@ function get_cached_data!(fc::FileCacher{TCached}, path::AbstractString)::Option
         result = try
             fc.reload_response(full_path)
         catch e
-            fc.error_response(full_path, e, catch_backtrace(), data)
+            fc.error_response(full_path, e, catch_backtrace())
         end
         (file_data, dependent_files) = if result isa Tuple{TCached, Any}
             result

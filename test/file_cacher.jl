@@ -30,18 +30,22 @@ file_load(relative_path) = open(file_full_path(relative_path)) do f
 end
 file_delete(relative_path) = rm(file_full_path(relative_path))
 
-
+const FILE_ERROR_COUNT = Ref(0)
 const ERROR_CACHED_DATA = MyCacheableData(-666, NaN32, [ ])
+function file_error(file_path::String, error::Exception,
+                    backtrace::Vector,
+                    old_data::Optional{MyCacheableData} = nothing)::MyCacheableData
+    FILE_ERROR_COUNT[] += 1
+    return ERROR_CACHED_DATA
+end
+
+
 const CACHER = FileCacher{MyCacheableData}(
     reload_response = (path, old...) -> let new = file_load(path)
         push!(new.previous_caches, old...)
         new
     end,
-    error_response = (path, ex, trace, old...) -> begin
-        # println(stderr, "Failed to ", isempty(old) ? "load" : "reload", " ", path, ": ")
-        # showerror(stderr, ex, trace)
-        ERROR_CACHED_DATA
-    end,
+    error_response = file_error,
     relative_path = TEMP_PATH,
     check_interval_ms = 1:1
 )
@@ -100,3 +104,17 @@ try
 finally
     rm(TEMP_PATH, recursive=true)
 end
+
+# Check error-handling.
+(() -> begin
+    invalid_file = "T:/BillysFakeFolder/ImpossibleFile.abccc"
+    @bp_check(!isfile(invalid_file), "WTF is up with your hard drives man")
+
+    pre_n_errors = FILE_ERROR_COUNT[]
+    data::MyCacheableData = get_cached_data!(CACHER, invalid_file)
+
+    @bp_check(data == ERROR_CACHED_DATA,
+              "\n\n", data, "\nvs\n", ERROR_CACHED_DATA, "\n")
+    @bp_check(FILE_ERROR_COUNT[] == pre_n_errors + 1,
+              pre_n_errors, " vs ", FILE_ERROR_COUNT[])
+end)()

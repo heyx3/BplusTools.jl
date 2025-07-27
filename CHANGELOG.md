@@ -1,3 +1,7 @@
+# v0.3.1
+
+* Fix bug with FileCacher's error-handling
+
 # v0.3.0
 
 \[none, just syncing with BplusCore's updates]

@@ -1,3 +1,7 @@
+# v0.3.2
+
+\[none, just syncing with updates to BplusCore and BplusApp]
+
 # v0.3.1
 
 * Fix bug with FileCacher's error-handling

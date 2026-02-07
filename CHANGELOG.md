@@ -1,6 +1,6 @@
 # v0.3.2
 
-\[none, just syncing with updates to BplusCore and BplusApp]
+* Optimizations to compile time for `ECS.@component`
 
 # v0.3.1
 

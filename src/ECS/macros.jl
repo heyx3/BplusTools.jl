@@ -1,6 +1,6 @@
 # An internal interface is used to reference inherited behavior/data from parent components.
 #    Metadata:
-@nospecialize
+# @nospecialize
 component_macro_field_names(T::Type{<:AbstractComponent} #= *without* type params =#) = error()
 component_macro_type_data(T::Type{<:AbstractComponent} # *without* type params
                           ) = # Returns a tuple of (field_types, original_type_param_names)
@@ -158,7 +158,7 @@ Here is a detailed example of an abstract component:
     # If a child implements this with different parameter types,
     #    the parent and child component can both participate in overload resolution,
     #    meaning children can extend or specialize a parent's configurables.
-    @conigurable should_stop()::Bool = false
+    @configurable should_stop()::Bool = false
 
     # This abstract base type handles the timing for its children.
     # Base class TICK() is called before children's TICK().
@@ -227,7 +227,7 @@ macro component(title, elements...)
     end
 
     # We need to know about the supertype at compile-time.
-    supertype_params = [ ]
+    supertype_params = Any[ ]
     supertype_t = if exists(component_type_decl.parent)
         unionall_type = if @capture(component_type_decl.parent, N_{Ts__})
             append!(supertype_params, Ts)
@@ -245,18 +245,21 @@ macro component(title, elements...)
     end
 
     # Extract the other parts of the declaration.
-    attributes = elements[1:(end-1)]
+    attributes = collect(Any, elements)[1:(end-1)]
     if length(elements) < 1
         error("No body found for the component '", component_type_decl.name, "'")
     end
     statements = (elements[end]::Expr).args
 
-    return macro_impl_component(component_type_decl, supertype_t, supertype_params,
+    return macro_impl_component(component_type_decl,
+                                supertype_t, supertype_params,
                                 attributes, statements)
 end
 
 function macro_impl_component(component_type_decl::SplitType, supertype_t::Optional{Type},
-                              supertype_params, attributes, statements)
+                              supertype_params::AbstractVector,
+                              attributes::AbstractVector,
+                              statements::AbstractVector)
     if exists(supertype_t) && !(supertype_t <: AbstractComponent)
         error("Component '", component_type_decl.name, "'s parent type '", supertype_t, "' is not a component itself!")
     end
@@ -272,14 +275,14 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
         end
     end
     esc_type_param_names = esc.(type_param_names)
-    (component_without_type_params, component_with_type_params) =
+    (component_without_type_params::Symbol, component_with_type_params::Union{Symbol, Expr}) =
         if isempty(type_param_names)
             (component_type_decl.name, component_type_decl.name)
         else
             (component_type_decl.name,
              :( $(component_type_decl.name){$(type_param_names...)} ))
         end
-    component_broad_type = if isempty(type_param_names)
+    component_broad_type::Union{Symbol, Expr} = if isempty(type_param_names)
         component_without_type_params
     else
         :( <:$component_without_type_params )
@@ -289,7 +292,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
     is_abstract::Bool = false
     is_entity_singleton::Bool = false
     is_world_singleton::Bool = false
-    requirements::Vector = [ ]
+    requirements::Vector = Union{Symbol, Expr}[ ]
     for attribute in attributes
         if @capture(attribute, {abstract})
             if is_abstract
@@ -316,6 +319,9 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
                 is_world_singleton = true
             end
         elseif @capture(attribute, {require:a_, b__})
+            if !isa(a, eltype(requirements)) || any(t -> !isa(t, eltype(requirements)), b)
+                error("Required components expression not valid: ", [ a, b... ])
+            end
             push!(requirements, a)
             append!(requirements, b)
         else
@@ -324,7 +330,7 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
     end
 
     # Inherit things from the parent type.
-    supertype_concrete_expr = if isnothing(supertype_t)
+    supertype_concrete_expr::Union{Nothing, Type, Expr} = if isnothing(supertype_t)
         AbstractComponent
     elseif isempty(supertype_params)
         supertype_t
@@ -1354,4 +1360,4 @@ function macro_impl_component(component_type_decl::SplitType, supertype_t::Optio
     end
     return final_expr
 end
-@specialize
+# @specialize

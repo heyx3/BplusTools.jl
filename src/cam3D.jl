@@ -94,8 +94,7 @@ export Cam3D_UpModes, E_Cam3D_UpModes, Cam3D_Settings
 
 "The user inputs used to set a 3D camera"
 Base.@kwdef struct Cam3D_Input{F<:AbstractFloat}
-    controlling_rotation::Bool = false # Important to know when the user stops
-                                       #    controlling rotation.
+    controlling_rotation::Bool = true
     yaw::F = zero(F)
     pitch::F = zero(F)
 

@@ -1,3 +1,7 @@
+# v0.3.3
+
+* Saner initial values for `Cam3D_Input`
+
 # v0.3.2
 
 * Optimizations to compile time for `ECS.@component`

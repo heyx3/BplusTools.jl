@@ -1,4 +1,4 @@
-# v0.3.3
+# v0.4.0
 
 * Saner initial values for `Cam3D_Input`
 

@@ -91,7 +91,7 @@ You can configure the cacher in a few ways:
     buffer::Vector{AbstractString} = [ ] # Used within some functions
 end
 #TODO: Callbacks should be type-stable
-#TODO: Rewrite this so a separate Task constantly checks all the files, sleeping in between each one
+#TODO: See if it's possible to hook into the OS for file change events
 
 function default_cache_error_response(path, exception, trace, old_data = nothing)
     @error "Unable to load $path." ex=(exception, trace)

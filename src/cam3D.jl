@@ -54,15 +54,18 @@ export PerspectiveProjection, OrthographicProjection, Cam3D,
 ##     Settings      ##
 #######################
 
-# Different ways the camera can handle its Up axis while rotating.
+"
+Different ways the camera can handle its Up axis while rotating:
+
+* `keep_upright`: Always keeps the camera's Up vector at its current value.
+  Prevent the forward vector from reaching that value.
+* `reset_on_letting_go`: Allow the camera to roll freely, but
+  snap back to the default Up axis once rotation input stops.
+* `free`: Allow the camera to roll without limitations.
+"
 @bp_enum(Cam3D_UpModes,
-    # Always keeps the camera's Up vector at its current value.
-    # Prevent the forward vector from reaching that value.
     keep_upright,
-    # Allow the camera to roll freely, but
-    #    snap back to the default Up axis once rotation input stops.
     reset_on_letting_go,
-    # Allow the camera to roll without limitations.
     free
 )
 

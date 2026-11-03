@@ -1,3 +1,7 @@
+# v0.4.1
+
+* Applying improvements from `BplusCore`
+
 # v0.4.0
 
 * Saner initial values for `Cam3D_Input`
